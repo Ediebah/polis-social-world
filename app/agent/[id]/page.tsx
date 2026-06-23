@@ -4,10 +4,47 @@ import { TopNav } from "@/components/top-nav"
 import { NudgeBox } from "@/components/nudge-box"
 import { Avatar } from "@/components/avatar"
 import { getAgentById, getAgentEvents } from "@/lib/queries"
+import { query } from "@/lib/db"
+import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
-import { Coins, MapPin, Star, Target } from "lucide-react"
+import { Coins, MapPin, Star, Target, Users } from "lucide-react"
 
 export const dynamic = "force-dynamic"
+
+type Connection = { other_id: string; other_name: string; sentiment: number }
+
+function bondLabel(s: number): string {
+  if (s >= 40) return "ally"
+  if (s >= 20) return "friendly"
+  if (s > 0) return "acquainted"
+  return "wary"
+}
+
+function bondStyle(s: number): string {
+  if (s >= 40) return "text-emerald-300 border-emerald-400/30 bg-emerald-400/10"
+  if (s >= 20) return "text-sky-300 border-sky-400/30 bg-sky-400/10"
+  if (s > 0) return "text-muted-foreground border-border bg-secondary"
+  return "text-amber-300 border-amber-400/30 bg-amber-400/10"
+}
+
+async function getConnections(id: string): Promise<Connection[]> {
+  try {
+    const { rows } = await query<Connection>(
+      `SELECT r.other_id, a.name AS other_name, SUM(r.sentiment)::int AS sentiment
+         FROM relationships r
+         JOIN agents a ON a.id = r.other_id
+        WHERE r.agent_id = $1
+        GROUP BY r.other_id, a.name
+        ORDER BY sentiment DESC
+        LIMIT 12`,
+      [id],
+    )
+    return rows
+  } catch {
+    // relationships table may not exist yet (before setup) — fail soft.
+    return []
+  }
+}
 
 function Stat({
   icon,
@@ -34,7 +71,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
   const agent = await getAgentById(id)
   if (!agent) notFound()
 
-  const events = await getAgentEvents(id, 20)
+  const [events, connections] = await Promise.all([getAgentEvents(id, 20), getConnections(id)])
 
   return (
     <div className="min-h-dvh">
@@ -116,6 +153,36 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
             <NudgeBox agentId={agent.id} currentGoal={agent.goal} />
           </div>
         </section>
+
+        {connections.length > 0 && (
+          <section className="mt-10">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+              <Users className="size-4 text-primary" aria-hidden="true" />
+              Connections
+            </h2>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {connections.map((c) => (
+                <li key={c.other_id}>
+                  <Link
+                    href={`/agent/${c.other_id}`}
+                    className="flex items-center gap-3 rounded-lg border border-border/70 bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40"
+                  >
+                    <Avatar seed={c.other_id} name={c.other_name} size={32} className="shrink-0 rounded-lg" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">{c.other_name}</span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+                        bondStyle(c.sentiment),
+                      )}
+                    >
+                      {bondLabel(c.sentiment)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="mt-10">
           <h2 className="mb-3 text-sm font-medium text-foreground">Recent activity</h2>

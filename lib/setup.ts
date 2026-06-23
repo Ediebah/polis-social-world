@@ -44,10 +44,19 @@ const DDL: string[] = [
     ref_id UUID,
     created_at TIMESTAMPTZ
   )`,
+  `CREATE TABLE IF NOT EXISTS relationships (
+    id UUID PRIMARY KEY,
+    agent_id UUID,
+    other_id UUID,
+    sentiment INT DEFAULT 0,
+    last_reason VARCHAR(40),
+    updated_at TIMESTAMPTZ
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_rel_agent ON relationships (agent_id, other_id)`,
 ]
 
 export async function ensureSchema() {
@@ -225,7 +234,6 @@ export async function seedWorld() {
   })
 
   // Seed 16 shards for each counter.
-  // population total = number of seeded agents; total_actions total = number of seeded events.
   await withConnection(async (client) => {
     const popPerShard = distribute(SEED_AGENTS.length, 16)
     const actPerShard = distribute(SEED_EVENTS.length, 16)
