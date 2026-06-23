@@ -1,9 +1,10 @@
 import Link from "next/link"
+import { cookies } from "next/headers"
 import { notFound } from "next/navigation"
 import { TopNav } from "@/components/top-nav"
 import { NudgeBox } from "@/components/nudge-box"
 import { Avatar } from "@/components/avatar"
-import { getAgentById, getAgentEvents } from "@/lib/queries"
+import { getAgentById, getAgentEvents, ownsAgent } from "@/lib/queries"
 import { query } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
@@ -31,12 +32,11 @@ function bondStyle(s: number): string {
 async function getConnections(id: string): Promise<Connection[]> {
   try {
     const { rows } = await query<Connection>(
-      `SELECT r.other_id, a.name AS other_name, SUM(r.sentiment)::int AS sentiment
+      `SELECT r.other_id, a.name AS other_name, r.sentiment
          FROM relationships r
          JOIN agents a ON a.id = r.other_id
         WHERE r.agent_id = $1
-        GROUP BY r.other_id, a.name
-        ORDER BY sentiment DESC
+        ORDER BY r.sentiment DESC
         LIMIT 12`,
       [id],
     )
@@ -72,6 +72,10 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
   const agent = await getAgentById(id)
   if (!agent) notFound()
 
+  // True only for the browser that spawned this citizen (holds the owner cookie).
+  const ownerToken = (await cookies()).get(`polis-own-${id}`)?.value
+  const isOwner = await ownsAgent(id, ownerToken)
+
   const [events, connections] = await Promise.all([getAgentEvents(id, 20), getConnections(id)])
 
   return (
@@ -96,7 +100,9 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
 
           <div className="flex min-w-0 flex-col gap-3">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">your citizen</span>
+              <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">
+                {isOwner ? "your citizen" : "a citizen"}
+              </span>
               <span
                 className={
                   agent.status === "alive"
@@ -138,7 +144,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
         </section>
 
         <section className="mt-8 grid gap-6 lg:grid-cols-5">
-          <div className="lg:col-span-3">
+          <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>
             <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
               <Target className="size-4 text-primary" aria-hidden="true" />
               Current goal
@@ -147,13 +153,15 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
               {agent.goal}
             </p>
           </div>
-          <div className="lg:col-span-2">
-            <h2 className="mb-3 text-sm font-medium text-foreground">Nudge your agent</h2>
-            <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-              You can&apos;t control them directly — but you can suggest a new purpose.
-            </p>
-            <NudgeBox agentId={agent.id} currentGoal={agent.goal} />
-          </div>
+          {isOwner && (
+            <div className="lg:col-span-2">
+              <h2 className="mb-3 text-sm font-medium text-foreground">Nudge your agent</h2>
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                You can&apos;t control them directly — but you can suggest a new purpose.
+              </p>
+              <NudgeBox agentId={agent.id} currentGoal={agent.goal} />
+            </div>
+          )}
         </section>
 
         {connections.length > 0 && (

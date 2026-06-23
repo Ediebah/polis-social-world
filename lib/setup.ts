@@ -1,4 +1,5 @@
-import { query, withConnection } from "./db"
+import { query, transaction } from "./db"
+import type { ClientBase } from "pg"
 import type { Persona } from "./types"
 
 const DDL: string[] = [
@@ -10,6 +11,7 @@ const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS agents (
     id UUID PRIMARY KEY,
     owner_user_id UUID,
+    owner_token UUID,
     name VARCHAR(60),
     persona JSONB,
     goal TEXT,
@@ -21,6 +23,8 @@ const DDL: string[] = [
     last_tick_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ
   )`,
+  // Add owner_token to tables created before ownership existed (idempotent).
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_token UUID`,
   `CREATE TABLE IF NOT EXISTS world_events (
     id UUID PRIMARY KEY,
     agent_id UUID,
@@ -44,19 +48,20 @@ const DDL: string[] = [
     ref_id UUID,
     created_at TIMESTAMPTZ
   )`,
+  // Composite PK (agent_id, other_id) makes the directed bond unique, so the
+  // upsert in bumpRelationship can't create duplicate rows under concurrency.
   `CREATE TABLE IF NOT EXISTS relationships (
-    id UUID PRIMARY KEY,
     agent_id UUID,
     other_id UUID,
     sentiment INT DEFAULT 0,
     last_reason VARCHAR(40),
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    PRIMARY KEY (agent_id, other_id)
   )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at)`,
-  `CREATE INDEX ASYNC IF NOT EXISTS idx_rel_agent ON relationships (agent_id, other_id)`,
 ]
 
 export async function ensureSchema() {
@@ -64,6 +69,32 @@ export async function ensureSchema() {
   for (const stmt of DDL) {
     await query(stmt)
   }
+}
+
+// Atomically claim the right to seed, so two concurrent "Found the city" calls
+// can't both run seedWorld() and double the world. The first caller to insert
+// the sentinel shard wins (rowCount 1); everyone else gets a no-op (rowCount 0).
+// Retries once on a serialization conflict, after which the row exists and the
+// retry resolves to "not claimed".
+export async function claimSeed(): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await query(
+        `INSERT INTO world_counters (counter_name, shard, value) VALUES ('seed_lock', 0, 1)
+         ON CONFLICT (counter_name, shard) DO NOTHING`,
+      )
+      return (r.rowCount ?? 0) === 1
+    } catch (err: any) {
+      if (err?.code === "40001" && attempt === 0) continue
+      throw err
+    }
+  }
+  return false
+}
+
+// Releases the seed claim so a failed seed can be retried.
+export async function releaseSeed(): Promise<void> {
+  await query(`DELETE FROM world_counters WHERE counter_name = 'seed_lock'`)
 }
 
 interface SeedAgent {
@@ -186,8 +217,9 @@ export async function seedWorld() {
   const agentIds: string[] = SEED_AGENTS.map(() => crypto.randomUUID())
   const now = Date.now()
 
-  // Insert users + agents (one tx, well under the 3000-row limit).
-  await withConnection(async (client) => {
+  // One atomic transaction: agents, events, and counters all land together or
+  // not at all (~59 rows, well under DSQL's 3000-row-per-tx limit).
+  await transaction(async (client: ClientBase) => {
     for (let i = 0; i < SEED_AGENTS.length; i++) {
       const a = SEED_AGENTS[i]
       const userId = crypto.randomUUID()
@@ -213,10 +245,7 @@ export async function seedWorld() {
         ],
       )
     }
-  })
 
-  // Insert world events.
-  await withConnection(async (client) => {
     for (const e of SEED_EVENTS) {
       await client.query(
         `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
@@ -231,10 +260,7 @@ export async function seedWorld() {
         ],
       )
     }
-  })
 
-  // Seed 16 shards for each counter.
-  await withConnection(async (client) => {
     const popPerShard = distribute(SEED_AGENTS.length, 16)
     const actPerShard = distribute(SEED_EVENTS.length, 16)
     for (let shard = 0; shard < 16; shard++) {
