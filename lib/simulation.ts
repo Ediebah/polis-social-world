@@ -1,13 +1,15 @@
 import { generateText, Output } from "ai"
+import { anthropic } from "@ai-sdk/anthropic"
 import { z } from "zod"
 import { query, withConnection } from "./db"
 import type { Agent, Persona } from "./types"
 import { LOCATIONS } from "./types"
 
-// Claude via the Vercel AI Gateway. Same OIDC auth already wired up — no key needed.
+// Claude via the Anthropic API directly (reads ANTHROPIC_API_KEY from env).
 // Haiku 4.5 is fast + cheap for high-volume agent ticks; swap to
-// "anthropic/claude-sonnet-4.6" for richer personalities at higher cost.
-const MODEL = "anthropic/claude-haiku-4.5"
+// anthropic("claude-sonnet-4-6") for richer personalities at higher cost.
+// If this exact id ever 404s, the undated alias "claude-haiku-4-5" also works.
+const MODEL = anthropic("claude-haiku-4-5-20251001")
 
 // How many times to replay a transaction on a DSQL optimistic-concurrency
 // conflict (SQLSTATE 40001) before giving up on that agent's tick.
