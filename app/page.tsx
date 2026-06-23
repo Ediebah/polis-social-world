@@ -2,6 +2,7 @@ import { TopNav } from "@/components/top-nav"
 import { WorldFeed } from "@/components/world-feed"
 import { SetupGate } from "@/components/setup-gate"
 import { AdvanceWorldButton } from "@/components/advance-world-button"
+import { CityMap } from "@/components/city-map"
 import { getFeed, getWorldCounts } from "@/lib/queries"
 import type { FeedItem, WorldCounts } from "@/lib/types"
 
@@ -38,7 +39,14 @@ export default async function HomePage() {
           ) : null}
         </div>
 
-        {initial ? <WorldFeed initialData={initial} /> : <SetupGate />}
+        {initial ? (
+          <>
+            <CityMap />
+            <WorldFeed initialData={initial} />
+          </>
+        ) : (
+          <SetupGate />
+        )}
       </main>
     </div>
   )
