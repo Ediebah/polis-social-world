@@ -33,7 +33,8 @@ export async function spawnAgentAction(_prev: SpawnState, formData: FormData): P
   }
 
   revalidatePath("/")
-  redirect(`/agent/${agentId}`)
+  // ?me=1 lets the agent page remember this as "your" citizen (no login).
+  redirect(`/agent/${agentId}?me=1`)
 }
 
 export async function nudgeAction(formData: FormData): Promise<void> {

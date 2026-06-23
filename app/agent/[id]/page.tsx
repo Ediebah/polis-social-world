@@ -8,6 +8,7 @@ import { query } from "@/lib/db"
 import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target, Users } from "lucide-react"
+import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 
 export const dynamic = "force-dynamic"
 
@@ -77,6 +78,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
     <div className="min-h-dvh">
       <TopNav />
       <main className="mx-auto max-w-3xl px-4 pb-24 pt-10">
+        <ClaimMyCitizen id={agent.id} name={agent.name} />
         <Link
           href="/"
           className="font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
