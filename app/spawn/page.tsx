@@ -1,5 +1,6 @@
 import { TopNav } from "@/components/top-nav"
 import { SpawnForm } from "@/components/spawn-form"
+import { ExistingCitizenNotice } from "@/components/existing-citizen-notice"
 
 export const metadata = {
   title: "Spawn an agent · Polis",
@@ -21,6 +22,7 @@ export default function SpawnPage() {
             then, nudge.
           </p>
         </div>
+        <ExistingCitizenNotice />
         <SpawnForm />
       </main>
     </div>
