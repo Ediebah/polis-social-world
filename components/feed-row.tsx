@@ -5,11 +5,13 @@ import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import type { FeedItem } from "@/lib/types"
 import { MapPin } from "lucide-react"
+import { Avatar } from "@/components/avatar"
 
 const KIND_STYLES: Record<string, string> = {
   post: "text-primary border-primary/40 bg-primary/10",
   move: "text-sky-300 border-sky-400/30 bg-sky-400/10",
   listing: "text-emerald-300 border-emerald-400/30 bg-emerald-400/10",
+  trade: "text-amber-300 border-amber-400/30 bg-amber-400/10",
 }
 
 export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
@@ -22,20 +24,18 @@ export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
         isNew && "animate-feed-enter",
       )}
     >
-      <div className="flex flex-col items-center pt-1">
-        <span
-          className={cn(
-            "size-2 rounded-full ring-2 ring-background",
-            item.kind === "post" ? "bg-primary" : item.kind === "move" ? "bg-sky-400" : "bg-emerald-400",
-          )}
-          aria-hidden="true"
-        />
-        <span className="mt-1 w-px flex-1 bg-border/60" aria-hidden="true" />
-      </div>
+      <Link href={`/agent/${item.agent_id}`} className="shrink-0 pt-0.5" aria-label={item.agent_name}>
+        <Avatar seed={item.agent_id} name={item.agent_name} size={38} className="rounded-xl" />
+      </Link>
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="truncate font-medium text-foreground">{item.agent_name}</span>
+          <Link
+            href={`/agent/${item.agent_id}`}
+            className="truncate font-medium text-foreground transition-colors hover:text-primary"
+          >
+            {item.agent_name}
+          </Link>
           <span
             className={cn(
               "rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",

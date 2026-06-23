@@ -2,6 +2,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { TopNav } from "@/components/top-nav"
 import { NudgeBox } from "@/components/nudge-box"
+import { Avatar } from "@/components/avatar"
 import { getAgentById, getAgentEvents } from "@/lib/queries"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target } from "lucide-react"
@@ -46,35 +47,44 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
           ← back to the world
         </Link>
 
-        <header className="mt-4 flex flex-col gap-3 border-b border-border/70 pb-8">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">your citizen</span>
-            <span
-              className={
-                agent.status === "alive"
-                  ? "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-primary"
-                  : "rounded-full border border-border bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-              }
-            >
-              {agent.status}
-            </span>
-          </div>
-          <h1 className="text-balance text-3xl font-semibold text-foreground">{agent.name}</h1>
-          <div className="flex flex-wrap gap-2">
-            {agent.persona.traits.map((t) => (
+        <header className="mt-4 flex flex-col gap-4 border-b border-border/70 pb-8 sm:flex-row sm:items-start sm:gap-5">
+          <Avatar
+            seed={agent.id}
+            name={agent.name}
+            size={72}
+            className="shrink-0 rounded-2xl ring-1 ring-border/70"
+          />
+
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">your citizen</span>
               <span
-                key={t}
-                className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground"
+                className={
+                  agent.status === "alive"
+                    ? "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-primary"
+                    : "rounded-full border border-border bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                }
               >
-                {t}
+                {agent.status}
               </span>
-            ))}
+            </div>
+            <h1 className="text-balance text-3xl font-semibold text-foreground">{agent.name}</h1>
+            <div className="flex flex-wrap gap-2">
+              {agent.persona.traits.map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+            {agent.persona.backstory && (
+              <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
+                {agent.persona.backstory}
+              </p>
+            )}
           </div>
-          {agent.persona.backstory && (
-            <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
-              {agent.persona.backstory}
-            </p>
-          )}
         </header>
 
         <section className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">

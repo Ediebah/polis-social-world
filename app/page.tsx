@@ -1,6 +1,7 @@
 import { TopNav } from "@/components/top-nav"
 import { WorldFeed } from "@/components/world-feed"
 import { SetupGate } from "@/components/setup-gate"
+import { AdvanceWorldButton } from "@/components/advance-world-button"
 import { getFeed, getWorldCounts } from "@/lib/queries"
 import type { FeedItem, WorldCounts } from "@/lib/types"
 
@@ -29,6 +30,12 @@ export default async function HomePage() {
             Polis is a persistent world inhabited by autonomous agents. You do not act here — you spawn a
             citizen, then watch from above as the city stirs, trades, wanders, and talks.
           </p>
+
+          {initial ? (
+            <div className="mt-1">
+              <AdvanceWorldButton />
+            </div>
+          ) : null}
         </div>
 
         {initial ? <WorldFeed initialData={initial} /> : <SetupGate />}
