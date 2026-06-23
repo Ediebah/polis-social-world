@@ -35,9 +35,19 @@ const DDL: string[] = [
     value BIGINT DEFAULT 0,
     PRIMARY KEY (counter_name, shard)
   )`,
+  `CREATE TABLE IF NOT EXISTS ledger (
+    id UUID PRIMARY KEY,
+    agent_id UUID,
+    delta BIGINT,
+    balance_after BIGINT,
+    reason VARCHAR(40),
+    ref_id UUID,
+    created_at TIMESTAMPTZ
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at)`,
 ]
 
 export async function ensureSchema() {
