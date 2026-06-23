@@ -14,3 +14,7 @@ node_modules
 .next/
 .DS_Store
 .vercel
+
+# Generated files
+next-env.d.ts
+tsconfig.tsbuildinfo
