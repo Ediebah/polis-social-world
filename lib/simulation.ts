@@ -132,12 +132,20 @@ async function decideAction(agent: TickAgent): Promise<AgentAction> {
     system,
     prompt,
     experimental_output: Output.object({ schema: ActionSchema }),
+    // Bound how long (and how hard) we wait on the model so one slow/looping
+    // call can't tie up the tick or the feed's background work.
+    maxRetries: 2,
+    timeout: { totalMs: 20_000 },
   })
   return experimental_output
 }
 
+// Returns a price in [1, max], or 0 when the agent cannot afford anything
+// (max < 1). Returning 0 — rather than clamping up to 1 — keeps the invariant
+// that the result never exceeds max, so a broke agent can't "spend" coins.
 function clampPrice(p: number | null, max: number): number {
-  const base = !p || !Number.isFinite(p) ? 25 : Math.round(p)
+  if (max < 1) return 0
+  const base = !p || !Number.isFinite(p) ? Math.min(25, max) : Math.round(p)
   return Math.max(1, Math.min(max, base))
 }
 
@@ -163,8 +171,10 @@ async function resolveCounterparty(agent: TickAgent, name: string | null) {
   return neighbor.rows[0] ?? null
 }
 
-// Strengthen the directed bond a -> b. Manual upsert (no unique constraint, so no
-// 23505 to poison the surrounding transaction). Runs inside the trade tx.
+// Strengthen the directed bond a -> b. Atomic upsert keyed on the composite
+// primary key (agent_id, other_id), so concurrent first-time bonds between the
+// same pair can't create duplicate rows that would double-count sentiment.
+// Runs inside the trade tx.
 async function bumpRelationship(
   client: any,
   a: string,
@@ -173,19 +183,15 @@ async function bumpRelationship(
   reason: string,
   now: string,
 ) {
-  const upd = await client.query(
-    `UPDATE relationships
-        SET sentiment = LEAST(100, GREATEST(-100, sentiment + $1)), last_reason = $2, updated_at = $3
-      WHERE agent_id = $4 AND other_id = $5`,
-    [delta, reason, now, a, b],
+  await client.query(
+    `INSERT INTO relationships (agent_id, other_id, sentiment, last_reason, updated_at)
+     VALUES ($1, $2, LEAST(100, GREATEST(-100, $3)), $4, $5)
+     ON CONFLICT (agent_id, other_id) DO UPDATE
+        SET sentiment = LEAST(100, GREATEST(-100, relationships.sentiment + EXCLUDED.sentiment)),
+            last_reason = EXCLUDED.last_reason,
+            updated_at = EXCLUDED.updated_at`,
+    [a, b, delta, reason, now],
   )
-  if ((upd.rowCount ?? 0) === 0) {
-    await client.query(
-      `INSERT INTO relationships (id, agent_id, other_id, sentiment, last_reason, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [crypto.randomUUID(), a, b, delta, reason, now],
-    )
-  }
 }
 
 type CommitOutcome = { status: "ok"; kind: string } | { status: "skipped" }
@@ -269,8 +275,10 @@ async function commitAction(agent: TickAgent, action: AgentAction): Promise<Comm
         [crypto.randomUUID(), agent.id, kind, JSON.stringify(payload), location, now],
       )
 
+      // Upsert so the increment still lands if this shard was never seeded.
       await client.query(
-        `UPDATE world_counters SET value = value + 1 WHERE counter_name = 'total_actions' AND shard = $1`,
+        `INSERT INTO world_counters (counter_name, shard, value) VALUES ('total_actions', $1, 1)
+         ON CONFLICT (counter_name, shard) DO UPDATE SET value = world_counters.value + 1`,
         [Math.floor(Math.random() * 16)],
       )
 

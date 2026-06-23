@@ -47,3 +47,26 @@ export async function withConnection<T>(fn: (client: ClientBase) => Promise<T>):
     client.release()
   }
 }
+
+// Runs fn inside a real BEGIN/COMMIT transaction, rolling back on any error.
+// Use this for multi-statement writes that must be atomic (spawn, seed, nudge).
+// Note: commitAction in simulation.ts manages its own BEGIN/COMMIT because it
+// needs to ROLLBACK-and-return without throwing on a lost OCC claim.
+export async function transaction<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const result = await fn(client)
+    await client.query("COMMIT")
+    return result
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK")
+    } catch {
+      // ignore rollback failure; surface the original error
+    }
+    throw err
+  } finally {
+    client.release()
+  }
+}
