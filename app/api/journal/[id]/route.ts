@@ -6,6 +6,7 @@ import { NextResponse } from "next/server"
 import { generateText } from "ai"
 import { anthropic } from "@ai-sdk/anthropic"
 import { query } from "@/lib/db"
+import { eventSummary } from "@/lib/format"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +22,22 @@ function parseJson<T>(v: unknown, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+// Plain-prose recap built with no AI, used as a fallback when the model call
+// fails, times out, or returns nothing — so the card degrades to a readable
+// summary instead of vanishing. Takes the events newest-first (as fetched),
+// uses the most recent few, and reads them back in chronological order.
+function buildDigest(rows: { kind: string; payload: unknown }[]): string {
+  const parts = rows
+    .slice(0, 5)
+    .reverse()
+    .map((e) => eventSummary({ kind: e.kind, payload: parseJson<Record<string, unknown>>(e.payload, {}) }).trim())
+    .filter(Boolean)
+  if (parts.length === 0) return ""
+  const joined =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join("; ")}; and ${parts[parts.length - 1]}`
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -50,7 +67,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     }
 
     const persona = parseJson<{ traits?: string[]; backstory?: string }>(agent.persona, {})
-    const lines = evRes.rows
+    const lines = [...evRes.rows]
       .reverse()
       .map((e) => {
         const p = parseJson<Record<string, unknown>>(e.payload, {})
@@ -60,27 +77,44 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       })
       .join("\n")
 
-    const { text } = await generateText({
-      model: MODEL,
-      maxRetries: 2,
-      system:
-        "You write a SHORT first-person journal entry (2 to 4 sentences) for a citizen of Polis, " +
-        "looking back on their recent day. In their voice, vivid but grounded. No preamble, no " +
-        "surrounding quotes, no mention of being an AI. Just the entry.",
-      prompt: [
-        `I am ${agent.name}.`,
-        `Traits: ${(persona.traits ?? []).join(", ") || "unspecified"}.`,
-        `My goal: ${agent.goal}.`,
-        "",
-        "What I did recently, oldest to newest:",
-        lines,
-        "",
-        "Write my journal entry looking back on this.",
-      ].join("\n"),
-    })
+    let journal: string
+    let fromModel = false
+    try {
+      const { text } = await generateText({
+        model: MODEL,
+        maxRetries: 2,
+        timeout: { totalMs: 20_000 },
+        system:
+          "You write a SHORT first-person journal entry (2 to 4 sentences) for a citizen of Polis, " +
+          "looking back on their recent day. In their voice, vivid but grounded. No preamble, no " +
+          "surrounding quotes, no mention of being an AI. Just the entry.",
+        prompt: [
+          `I am ${agent.name}.`,
+          `Traits: ${(persona.traits ?? []).join(", ") || "unspecified"}.`,
+          `My goal: ${agent.goal}.`,
+          "",
+          "What I did recently, oldest to newest:",
+          lines,
+          "",
+          "Write my journal entry looking back on this.",
+        ].join("\n"),
+      })
+      const trimmed = text.trim()
+      if (trimmed) {
+        journal = trimmed
+        fromModel = true
+      } else {
+        journal = buildDigest(evRes.rows)
+      }
+    } catch (err) {
+      // Model failed/timed out — fall back to the plain-prose digest.
+      console.error("[polis] journal model fallback:", err)
+      journal = buildDigest(evRes.rows)
+    }
 
-    const journal = text.trim()
-    cache.set(id, { text: journal, at: Date.now() })
+    // Only cache real model output; let a digest fallback retry the model on the
+    // next visit so a transient blip self-heals instead of sticking for the TTL.
+    if (fromModel) cache.set(id, { text: journal, at: Date.now() })
     return NextResponse.json({ journal })
   } catch (err) {
     console.error("[polis] journal error:", err)
