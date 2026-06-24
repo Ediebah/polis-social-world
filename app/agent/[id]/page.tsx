@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target, Users } from "lucide-react"
 import { ClaimMyCitizen } from "@/components/claim-my-citizen"
+import { AgentJournal } from "@/components/agent-journal"
 
 export const dynamic = "force-dynamic"
 
@@ -142,6 +143,8 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
             value={String(agent.next_tick_seq)}
           />
         </section>
+
+        <AgentJournal agentId={agent.id} />
 
         <section className="mt-8 grid gap-6 lg:grid-cols-5">
           <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>
