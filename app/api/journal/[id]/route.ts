@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic"
 
 const MODEL = anthropic("claude-haiku-4-5-20251001")
 const TTL_MS = 90_000
-const cache = new Map<string, { text: string; at: number }>()
+const cache = new Map<string, { text: string; at: number; lastEventAt: string | null }>()
 
 function parseJson<T>(v: unknown, fallback: T): T {
   if (v == null) return fallback
@@ -45,7 +45,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   try {
     const cached = cache.get(id)
     if (cached && Date.now() - cached.at < TTL_MS) {
-      return NextResponse.json({ journal: cached.text })
+      return NextResponse.json({ journal: cached.text, lastEventAt: cached.lastEventAt })
     }
 
     const agentRes = await query<{ name: string; persona: unknown; goal: string }>(
@@ -53,18 +53,21 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       [id],
     )
     const agent = agentRes.rows[0]
-    if (!agent) return NextResponse.json({ journal: "" })
+    if (!agent) return NextResponse.json({ journal: "", lastEventAt: null })
 
-    const evRes = await query<{ kind: string; payload: unknown; location: string }>(
-      `SELECT kind, payload, location FROM world_events
+    const evRes = await query<{ kind: string; payload: unknown; location: string; created_at: string }>(
+      `SELECT kind, payload, location, created_at FROM world_events
         WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 15`,
       [id],
     )
     if (evRes.rows.length === 0) {
       const empty = "Nothing has happened yet. The day is still ahead of me."
-      cache.set(id, { text: empty, at: Date.now() })
-      return NextResponse.json({ journal: empty })
+      cache.set(id, { text: empty, at: Date.now(), lastEventAt: null })
+      return NextResponse.json({ journal: empty, lastEventAt: null })
     }
+
+    // Newest event first in the result; capture its time for the UI dateline.
+    const lastEventAt = evRes.rows[0].created_at
 
     const persona = parseJson<{ traits?: string[]; backstory?: string }>(agent.persona, {})
     const lines = [...evRes.rows]
@@ -114,10 +117,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     // Only cache real model output; let a digest fallback retry the model on the
     // next visit so a transient blip self-heals instead of sticking for the TTL.
-    if (fromModel) cache.set(id, { text: journal, at: Date.now() })
-    return NextResponse.json({ journal })
+    if (fromModel) cache.set(id, { text: journal, at: Date.now(), lastEventAt })
+    return NextResponse.json({ journal, lastEventAt })
   } catch (err) {
     console.error("[polis] journal error:", err)
-    return NextResponse.json({ journal: "" })
+    return NextResponse.json({ journal: "", lastEventAt: null })
   }
 }
