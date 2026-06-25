@@ -1,38 +1,103 @@
 // components/agent-voice-ask.tsx
-// Ask a citizen a question — by voice where the browser supports it, otherwise
-// by typing — and hear it answer in first person about what it's been doing.
+// Ask a citizen a question — by voice where the browser can capture a mic,
+// otherwise by typing — and hear it answer in first person about what it's been
+// doing. Voice in: mic -> 16kHz mono PCM -> /api/transcribe (Amazon Transcribe).
+// Voice out: /api/speak (Amazon Polly), with the browser's speech synthesis as a
+// fallback. Both AWS routes reuse the app's OIDC role; everything fails soft.
 "use client"
 
 import { useEffect, useRef, useState } from "react"
 import { Loader2, Mic, Send, Square, Volume2 } from "lucide-react"
 
+// Flatten captured Float32 mic frames, resample to 16kHz, and pack as signed
+// 16-bit little-endian PCM — the format Amazon Transcribe streaming expects.
+function floatChunksToPcm16(chunks: Float32Array[], inRate: number, outRate: number): Uint8Array {
+  let len = 0
+  for (const c of chunks) len += c.length
+  const merged = new Float32Array(len)
+  let off = 0
+  for (const c of chunks) {
+    merged.set(c, off)
+    off += c.length
+  }
+  const ratio = inRate / outRate
+  const outLen = Math.max(0, Math.floor(merged.length / ratio))
+  const pcm = new Int16Array(outLen)
+  for (let i = 0; i < outLen; i++) {
+    const s = Math.max(-1, Math.min(1, merged[Math.floor(i * ratio)] || 0))
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+  }
+  return new Uint8Array(pcm.buffer)
+}
+
 export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentName: string }) {
-  const [voiceSupported, setVoiceSupported] = useState(false)
+  const [micSupported, setMicSupported] = useState(false)
   const [listening, setListening] = useState(false)
   const [question, setQuestion] = useState("")
   const [answer, setAnswer] = useState("")
   const [thinking, setThinking] = useState(false)
-  // Holds the active SpeechRecognition instance (no DOM type — vendor-prefixed).
-  const recognitionRef = useRef<any>(null)
+
+  const streamRef = useRef<MediaStream | null>(null)
+  const ctxRef = useRef<any>(null)
+  const procRef = useRef<any>(null)
+  const chunksRef = useRef<Float32Array[]>([])
+  const audioElRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    setVoiceSupported(Boolean(SR))
+    const hasMic = Boolean(navigator.mediaDevices?.getUserMedia)
+    const hasCtx = Boolean((window as any).AudioContext || (window as any).webkitAudioContext)
+    setMicSupported(hasMic && hasCtx)
+    return () => {
+      // best-effort cleanup if we unmount mid-capture
+      try {
+        streamRef.current?.getTracks().forEach((t) => t.stop())
+      } catch {
+        // ignore
+      }
+      try {
+        ctxRef.current?.close?.()
+      } catch {
+        // ignore
+      }
+    }
   }, [])
 
-  function speak(text: string) {
-    // Speaking is best-effort: if TTS is unavailable, the answer text still shows.
+  // ---- voice out: Polly, falling back to the browser voice ----
+  function browserSpeak(text: string) {
     try {
-      const synth = typeof window !== "undefined" ? window.speechSynthesis : null
+      const synth = window.speechSynthesis
       if (!synth || !text) return
       synth.cancel()
       synth.speak(new SpeechSynthesisUtterance(text))
     } catch {
-      // ignore — text remains visible
+      // ignore — text still shows
     }
   }
 
+  async function speak(text: string) {
+    if (!text) return
+    try {
+      const res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, id: agentId }),
+      })
+      if (!res.ok) throw new Error("tts unavailable")
+      const blob = await res.blob()
+      if (!blob.size) throw new Error("empty audio")
+      const url = URL.createObjectURL(blob)
+      const el = audioElRef.current ?? new Audio()
+      audioElRef.current = el
+      el.src = url
+      el.onended = () => URL.revokeObjectURL(url)
+      await el.play()
+    } catch {
+      browserSpeak(text)
+    }
+  }
+
+  // ---- ask the agent ----
   async function ask(raw: string) {
     const q = raw.trim()
     if (!q || thinking) return
@@ -55,38 +120,74 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
     }
   }
 
-  function startListening() {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SR) return
+  // ---- voice in: capture mic as PCM, transcribe, then ask ----
+  async function startListening() {
     try {
-      const rec = new SR()
-      rec.lang = "en-US"
-      rec.interimResults = false
-      rec.maxAlternatives = 1
-      rec.onresult = (e: any) => {
-        const transcript = String(e?.results?.[0]?.[0]?.transcript ?? "").trim()
-        if (transcript) {
-          setQuestion(transcript)
-          ask(transcript)
-        }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+      const ctx = new Ctx()
+      await ctx.resume?.()
+      ctxRef.current = ctx
+      const source = ctx.createMediaStreamSource(stream)
+      const proc = ctx.createScriptProcessor(4096, 1, 1)
+      procRef.current = proc
+      chunksRef.current = []
+      proc.onaudioprocess = (e: any) => {
+        chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)))
       }
-      rec.onend = () => setListening(false)
-      rec.onerror = () => setListening(false)
-      recognitionRef.current = rec
+      source.connect(proc)
+      proc.connect(ctx.destination) // outputs silence; needed for the processor to run
       setListening(true)
-      rec.start()
     } catch {
+      // mic denied/unavailable — drop to the text input
+      setMicSupported(false)
       setListening(false)
     }
   }
 
-  function stopListening() {
+  async function stopListening() {
+    setListening(false)
+    const ctx = ctxRef.current
+    const sampleRate = ctx?.sampleRate ?? 48000
     try {
-      recognitionRef.current?.stop()
+      procRef.current?.disconnect()
     } catch {
       // ignore
     }
-    setListening(false)
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop())
+    } catch {
+      // ignore
+    }
+    try {
+      await ctx?.close?.()
+    } catch {
+      // ignore
+    }
+
+    const pcm = floatChunksToPcm16(chunksRef.current, sampleRate, 16000)
+    chunksRef.current = []
+    if (pcm.byteLength < 2000) return // too short to mean anything
+
+    setThinking(true)
+    try {
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: pcm,
+      })
+      const data = await res.json()
+      const t = typeof data?.transcript === "string" ? data.transcript : ""
+      if (t) {
+        setQuestion(t)
+        ask(t)
+      } else {
+        setThinking(false)
+      }
+    } catch {
+      setThinking(false)
+    }
   }
 
   return (
@@ -96,7 +197,7 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
         Ask {agentName}
       </h2>
       <div className="rounded-lg border border-border/70 bg-card/50 px-5 py-4">
-        {voiceSupported ? (
+        {micSupported ? (
           <button
             type="button"
             onClick={() => (listening ? stopListening() : startListening())}

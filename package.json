@@ -11,6 +11,8 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.85",
     "@aws-sdk/client-dsql": "^3.1075.0",
+    "@aws-sdk/client-polly": "^3.1075.0",
+    "@aws-sdk/client-transcribe-streaming": "^3.1075.0",
     "@aws-sdk/dsql-signer": "^3.1075.0",
     "@base-ui/react": "^1.5.0",
     "@vercel/analytics": "1.6.1",
