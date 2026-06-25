@@ -11,6 +11,7 @@ import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target, Users } from "lucide-react"
 import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 import { AgentJournal } from "@/components/agent-journal"
+import { AgentVoiceAsk } from "@/components/agent-voice-ask"
 
 export const dynamic = "force-dynamic"
 
@@ -145,6 +146,8 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
         </section>
 
         <AgentJournal agentId={agent.id} />
+
+        <AgentVoiceAsk agentId={agent.id} agentName={agent.name} />
 
         <section className="mt-8 grid gap-6 lg:grid-cols-5">
           <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>
