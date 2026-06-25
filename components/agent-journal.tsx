@@ -3,9 +3,11 @@
 
 import { useEffect, useState } from "react"
 import { BookOpen } from "lucide-react"
+import { relativeTime } from "@/lib/format"
 
 export function AgentJournal({ agentId }: { agentId: string }) {
   const [journal, setJournal] = useState<string | null>(null)
+  const [lastEventAt, setLastEventAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -16,6 +18,7 @@ export function AgentJournal({ agentId }: { agentId: string }) {
       .then((d) => {
         if (alive) {
           setJournal(d.journal ?? "")
+          setLastEventAt(d.lastEventAt ?? null)
           setLoading(false)
         }
       })
@@ -32,12 +35,19 @@ export function AgentJournal({ agentId }: { agentId: string }) {
 
   if (!loading && !journal) return null
 
+  const dateline = lastEventAt ? relativeTime(lastEventAt) : null
+
   return (
     <section className="mt-8">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-        <BookOpen className="size-4 text-primary" aria-hidden="true" />
-        From their journal
-      </h2>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <BookOpen className="size-4 text-primary" aria-hidden="true" />
+          From their journal
+        </h2>
+        {dateline ? (
+          <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{dateline}</span>
+        ) : null}
+      </div>
       <div className="rounded-lg border border-border/70 bg-card/50 px-5 py-4">
         {loading ? (
           <div className="space-y-2.5">
