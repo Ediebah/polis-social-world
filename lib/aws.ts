@@ -13,3 +13,16 @@ export function awsCredentials() {
     clientConfig: { region: AWS_REGION },
   })
 }
+
+// Credentials for the voice routes (Polly, Transcribe). These assume a dedicated
+// role (AWS_VOICE_ROLE_ARN) that grants polly:SynthesizeSpeech +
+// transcribe:StartStreamTranscription, because the Vercel marketplace DSQL role
+// is locked by a permissions boundary to data services only. Falls back to the
+// DSQL role when unset — in which case the calls are denied and the UI falls
+// back to the browser voice / text input.
+export function voiceCredentials() {
+  return awsCredentialsProvider({
+    roleArn: (process.env.AWS_VOICE_ROLE_ARN || process.env.AWS_ROLE_ARN) as string,
+    clientConfig: { region: AWS_REGION },
+  })
+}
