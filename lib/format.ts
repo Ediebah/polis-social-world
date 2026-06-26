@@ -42,3 +42,22 @@ export const KIND_LABEL: Record<string, string> = {
   move: "moved",
   listing: "listed",
 }
+
+// Strips common Markdown syntax so model-written text reads cleanly as prose and
+// is spoken cleanly by TTS (e.g. a model that prefixes a journal with "# Day's
+// End" — otherwise Polly reads the "#" aloud).
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ") // fenced code blocks
+    .replace(/`([^`]+)`/g, "$1") // inline code
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links/images -> their text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "") // headings: "# Title" -> "Title"
+    .replace(/^\s{0,3}>\s?/gm, "") // blockquotes
+    .replace(/^\s{0,3}([-*+]|\d+\.)\s+/gm, "") // list markers
+    .replace(/(\*\*|__)(.*?)\1/g, "$2") // bold
+    .replace(/(\*|_)(.*?)\1/g, "$2") // italic
+    .replace(/^\s*([*_-]\s*){3,}$/gm, "") // horizontal rules
+    .replace(/[ \t]+\n/g, "\n") // trailing spaces
+    .replace(/\n{3,}/g, "\n\n") // collapse extra blank lines
+    .trim()
+}
