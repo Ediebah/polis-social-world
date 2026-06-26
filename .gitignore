@@ -20,3 +20,6 @@ node_modules
 # Generated files
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Playwright MCP browser session artifacts
+.playwright-mcp/
