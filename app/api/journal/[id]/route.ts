@@ -6,7 +6,7 @@ import { NextResponse } from "next/server"
 import { generateText } from "ai"
 import { anthropic } from "@ai-sdk/anthropic"
 import { query } from "@/lib/db"
-import { eventSummary } from "@/lib/format"
+import { eventSummary, stripMarkdown } from "@/lib/format"
 
 export const dynamic = "force-dynamic"
 
@@ -89,8 +89,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         timeout: { totalMs: 20_000 },
         system:
           "You write a SHORT first-person journal entry (2 to 4 sentences) for a citizen of Polis, " +
-          "looking back on their recent day. In their voice, vivid but grounded. No preamble, no " +
-          "surrounding quotes, no mention of being an AI. Just the entry.",
+          "looking back on their recent day. In their voice, vivid but grounded. Plain prose only — " +
+          "no markdown, headings, titles, or bullet points. No preamble, no surrounding quotes, no " +
+          "mention of being an AI. Just the entry.",
         prompt: [
           `I am ${agent.name}.`,
           `Traits: ${(persona.traits ?? []).join(", ") || "unspecified"}.`,
@@ -102,9 +103,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
           "Write my journal entry looking back on this.",
         ].join("\n"),
       })
-      const trimmed = text.trim()
-      if (trimmed) {
-        journal = trimmed
+      const cleaned = stripMarkdown(text)
+      if (cleaned) {
+        journal = cleaned
         fromModel = true
       } else {
         journal = buildDigest(evRes.rows)
