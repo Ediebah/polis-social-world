@@ -2,7 +2,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { BookOpen, Loader2, Volume2 } from "lucide-react"
+import { BookOpen, ChevronDown, Loader2, Volume2 } from "lucide-react"
 import { relativeTime } from "@/lib/format"
 
 export function AgentJournal({ agentId }: { agentId: string }) {
@@ -10,6 +10,8 @@ export function AgentJournal({ agentId }: { agentId: string }) {
   const [lastEventAt, setLastEventAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [speaking, setSpeaking] = useState(false)
+  // Collapsed by default so the journal stays compact; one tap reveals it.
+  const [collapsed, setCollapsed] = useState(true)
 
   useEffect(() => {
     let alive = true
@@ -73,44 +75,59 @@ export function AgentJournal({ agentId }: { agentId: string }) {
 
   return (
     <section className="mt-8">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <BookOpen className="size-4 text-primary" aria-hidden="true" />
-          From their journal
-        </h2>
-        {dateline ? (
-          <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{dateline}</span>
-        ) : null}
-      </div>
-      <div className="rounded-lg border border-border/70 bg-card/50 px-5 py-4">
-        {loading ? (
-          <div className="space-y-2.5">
-            <div className="h-3 w-full animate-pulse rounded bg-secondary" />
-            <div className="h-3 w-5/6 animate-pulse rounded bg-secondary" />
-            <div className="h-3 w-2/3 animate-pulse rounded bg-secondary" />
-          </div>
-        ) : (
-          <div className="flex items-start gap-3">
-            <p className="min-w-0 flex-1 text-pretty text-sm italic leading-relaxed text-muted-foreground">
-              {journal}
-            </p>
-            <button
-              type="button"
-              onClick={() => journal && speak(journal)}
-              disabled={speaking}
-              aria-label="Listen to this entry"
-              title="Listen"
-              className="shrink-0 rounded-md border border-border bg-secondary/40 p-1.5 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
-            >
-              {speaking ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <Volume2 className="size-4" aria-hidden="true" />
-              )}
-            </button>
-          </div>
-        )}
-      </div>
+      <h2 className="mb-3">
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={collapsed ? "false" : "true"}
+          className="group flex w-full items-center justify-between gap-2 text-left text-sm font-medium text-foreground"
+        >
+          <span className="flex items-center gap-2">
+            <BookOpen className="size-4 text-primary" aria-hidden="true" />
+            From their journal
+          </span>
+          <span className="flex items-center gap-2">
+            {dateline ? (
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{dateline}</span>
+            ) : null}
+            <ChevronDown
+              className={`size-4 text-muted-foreground transition-transform group-hover:text-foreground ${collapsed ? "" : "rotate-180"}`}
+              aria-hidden="true"
+            />
+          </span>
+        </button>
+      </h2>
+      {!collapsed ? (
+        <div className="rounded-lg border border-border/70 bg-card/50 px-5 py-4">
+          {loading ? (
+            <div className="space-y-2.5">
+              <div className="h-3 w-full animate-pulse rounded bg-secondary" />
+              <div className="h-3 w-5/6 animate-pulse rounded bg-secondary" />
+              <div className="h-3 w-2/3 animate-pulse rounded bg-secondary" />
+            </div>
+          ) : (
+            <div className="flex items-start gap-3">
+              <p className="min-w-0 flex-1 text-pretty text-sm italic leading-relaxed text-muted-foreground">
+                {journal}
+              </p>
+              <button
+                type="button"
+                onClick={() => journal && speak(journal)}
+                disabled={speaking}
+                aria-label="Listen to this entry"
+                title="Listen"
+                className="shrink-0 rounded-md border border-border bg-secondary/40 p-1.5 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+              >
+                {speaking ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="size-4" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
     </section>
   )
 }
