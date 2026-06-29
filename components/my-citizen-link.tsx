@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ChevronDown } from "lucide-react"
 import { Avatar } from "@/components/avatar"
-import { getMyCitizens, type MyCitizen } from "@/lib/me"
+import { addMyCitizen, getMyCitizens, type MyCitizen } from "@/lib/me"
+
+// Marks that we've already backfilled from the server once in this browser.
+const RECOVERED_KEY = "polis:my-citizens:recovered"
 
 export function MyCitizenLink() {
   const [citizens, setCitizens] = useState<MyCitizen[]>([])
@@ -12,7 +15,42 @@ export function MyCitizenLink() {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    // Show whatever we already remember right away.
     setCitizens(getMyCitizens())
+
+    // One-time backfill: citizens spawned before the multi-citizen list were
+    // never saved locally (the old code overwrote a single value), but each
+    // spawn left a `polis-own-<id>` cookie. Ask the server to resolve those
+    // (ownership-verified) and merge them in. Runs once per browser.
+    let alreadyRecovered = false
+    try {
+      alreadyRecovered = localStorage.getItem(RECOVERED_KEY) === "1"
+    } catch {
+      alreadyRecovered = true // storage unavailable — nothing to merge into
+    }
+    if (alreadyRecovered) return
+
+    let cancelled = false
+    fetch("/api/my-citizens")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { citizens?: MyCitizen[] } | null) => {
+        if (cancelled || !data?.citizens) return
+        for (const c of data.citizens) {
+          if (c && c.id && c.name) addMyCitizen(c)
+        }
+        try {
+          localStorage.setItem(RECOVERED_KEY, "1")
+        } catch {
+          // ignore — we just won't persist the "recovered" marker
+        }
+        setCitizens(getMyCitizens())
+      })
+      .catch(() => {
+        // network/db hiccup — leave the marker unset so we retry next mount
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Close the dropdown on any click outside of it.
