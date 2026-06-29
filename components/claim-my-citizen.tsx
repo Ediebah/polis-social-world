@@ -4,13 +4,13 @@
 "use client"
 
 import { useEffect } from "react"
-import { setMyCitizen } from "@/lib/me"
+import { addMyCitizen } from "@/lib/me"
 
 export function ClaimMyCitizen({ id, name }: { id: string; name: string }) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get("me") === "1") {
-      setMyCitizen({ id, name })
+      addMyCitizen({ id, name })
       window.history.replaceState(null, "", window.location.pathname)
     }
   }, [id, name])
