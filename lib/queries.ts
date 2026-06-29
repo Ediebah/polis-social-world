@@ -88,6 +88,30 @@ export async function listAgents(limit = 12): Promise<Pick<Agent, "id" | "name" 
   return rows
 }
 
+// Resolve cookie-derived (agentId, ownerToken) pairs into the citizens this
+// browser actually spawned. The token must match the stored owner_token, so we
+// never reveal an agent the caller doesn't own. owner_token is used only for the
+// match here and is never returned to the client. Ordered oldest-first so the
+// caller can rebuild a most-recent-last list. Used to recover citizens spawned
+// before the multi-citizen list existed (each spawn left a polis-own-<id> cookie).
+export async function getOwnedAgents(
+  pairs: { id: string; token: string }[],
+): Promise<Pick<Agent, "id" | "name">[]> {
+  if (pairs.length === 0) return []
+  const ids = pairs.map((p) => p.id)
+  const { rows } = await query<{ id: string; name: string; owner_token: string }>(
+    `SELECT id::text AS id, name, owner_token::text AS owner_token
+       FROM agents
+      WHERE id::text = ANY($1)
+      ORDER BY created_at ASC`,
+    [ids],
+  )
+  const tokenById = new Map(pairs.map((p) => [p.id, p.token]))
+  return rows
+    .filter((r) => tokenById.get(r.id) === r.owner_token)
+    .map((r) => ({ id: r.id, name: r.name }))
+}
+
 // Increments a random shard of a sharded counter, inside the caller's tx.
 // Upserts so the increment lands even if the shard row was never seeded.
 async function bumpCounter(client: ClientBase, counter: string, delta = 1) {
