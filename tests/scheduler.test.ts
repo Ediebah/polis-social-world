@@ -197,6 +197,15 @@ describe("who acts", () => {
     expect(agentsAsked()).toEqual(["Ada", "Bea", "Cal", "Dot"])
   })
 
+  it("doesn't let citizens whose first attempts keep failing crowd out those who have acted", async () => {
+    for (const name of ["Ada", "Bea", "Cal"]) await addAgent(name, { lastAttemptAt: "2026-11-02T05:00:00Z" })
+    await addAgent("Old", { lastTickAt: "2026-11-02T04:00:00Z" })
+
+    await runScheduledSlot()
+
+    expect(agentsAsked()).toContain("Old")
+  })
+
   it("lets an agent act at most six times in 24 hours", async () => {
     await addAgent("Ada")
 

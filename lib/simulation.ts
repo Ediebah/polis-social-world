@@ -55,12 +55,14 @@ async function selectAgentsForTick(limit: number): Promise<TickAgent[]> {
   const { rows } = await query<
     Agent & { persona: unknown; next_tick_seq: string | number; last_attempt_at: string | null }
   >(
-    // Citizens who have never acted go first, then whoever has waited longest.
+    // Citizens who have never been tried go first, then whoever has waited longest. A
+    // failed attempt gives up that priority, so citizens who keep failing can't crowd out
+    // everyone else.
     `SELECT id, name, persona, goal, location, balance, reputation, next_tick_seq, last_tick_at, last_attempt_at
        FROM agents
       WHERE status = 'alive'
         AND (COALESCE(last_attempt_at, last_tick_at) IS NULL OR COALESCE(last_attempt_at, last_tick_at) < $2)
-      ORDER BY (last_tick_at IS NOT NULL), COALESCE(last_attempt_at, last_tick_at, created_at)
+      ORDER BY (COALESCE(last_attempt_at, last_tick_at) IS NOT NULL), COALESCE(last_attempt_at, last_tick_at, created_at)
       LIMIT $1`,
     [limit, cutoff],
   )

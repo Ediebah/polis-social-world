@@ -5,7 +5,7 @@ import type { Agent, FeedItem, Persona, WorldCounts, WorldEvent } from "./types"
 
 const COUNTER_SHARDS = 16
 
-// Citizens who have never acted go first in the tick queue, and spawning is public.
+// Citizens who have never been tried go first in the tick queue, and spawning is public.
 // Each slot offers 3 turns (288 a day), so this limit leaves most of them for
 // everyone else, however many spawns someone attempts.
 const DAILY_SPAWN_LIMIT = 50
