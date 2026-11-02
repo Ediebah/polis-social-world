@@ -1,14 +1,21 @@
-import { generateText, Output } from "ai"
-import { anthropic } from "@ai-sdk/anthropic"
+import { Output } from "ai"
+import type { ClientBase } from "pg"
 import { z } from "zod"
 import { query, withConnection } from "./db"
+import { retryOnConflict } from "./occ"
+import { generateWithinBudget, SpendBlockedError } from "./spend"
 import type { Agent, Persona } from "./types"
 import { LOCATIONS } from "./types"
 
-// Claude via the Anthropic API directly (reads ANTHROPIC_API_KEY from env).
-const MODEL = anthropic("claude-haiku-4-5-20251001")
+// One attempt per window caps each agent at six actions a day, and a failed attempt
+// counts, so one broken agent can't keep spending or hold the front of the queue.
+const MIN_MS_BETWEEN_ATTEMPTS = 4 * 60 * 60_000
 
-const MAX_RETRIES = 4
+// Don't start an agent with less time than this left before the run's deadline: it
+// needs room for a full model timeout plus the commit.
+const MIN_MS_TO_START_AGENT = 30_000
+
+const MAX_ACTION_TOKENS = 300
 
 function parseJson<T>(v: unknown, fallback: T): T {
   if (v == null) return fallback
@@ -29,6 +36,7 @@ interface TickAgent {
   balance: number
   reputation: number
   tickSeq: number
+  lastAttemptAt: string | null
 }
 
 const ActionSchema = z.object({
@@ -43,13 +51,18 @@ const ActionSchema = z.object({
 type AgentAction = z.infer<typeof ActionSchema>
 
 async function selectAgentsForTick(limit: number): Promise<TickAgent[]> {
-  const { rows } = await query<Agent & { persona: unknown; next_tick_seq: string | number }>(
-    `SELECT id, name, persona, goal, location, balance, reputation, next_tick_seq, last_tick_at
+  const cutoff = new Date(Date.now() - MIN_MS_BETWEEN_ATTEMPTS).toISOString()
+  const { rows } = await query<
+    Agent & { persona: unknown; next_tick_seq: string | number; last_attempt_at: string | null }
+  >(
+    // Citizens who have never acted go first, then whoever has waited longest.
+    `SELECT id, name, persona, goal, location, balance, reputation, next_tick_seq, last_tick_at, last_attempt_at
        FROM agents
       WHERE status = 'alive'
-      ORDER BY COALESCE(last_tick_at, created_at)
+        AND (COALESCE(last_attempt_at, last_tick_at) IS NULL OR COALESCE(last_attempt_at, last_tick_at) < $2)
+      ORDER BY (last_tick_at IS NOT NULL), COALESCE(last_attempt_at, last_tick_at, created_at)
       LIMIT $1`,
-    [limit],
+    [limit, cutoff],
   )
   return rows.map((r) => ({
     id: r.id,
@@ -60,6 +73,7 @@ async function selectAgentsForTick(limit: number): Promise<TickAgent[]> {
     balance: Number(r.balance),
     reputation: Number(r.reputation),
     tickSeq: Number(r.next_tick_seq ?? 0),
+    lastAttemptAt: r.last_attempt_at,
   }))
 }
 
@@ -127,15 +141,11 @@ async function decideAction(agent: TickAgent): Promise<AgentAction> {
     "Decide your next single action now.",
   ].join("\n")
 
-  const { experimental_output } = await generateText({
-    model: MODEL,
+  const { experimental_output } = await generateWithinBudget("tick", {
     system,
     prompt,
-    experimental_output: Output.object({ schema: ActionSchema }),
-    // Bound how long (and how hard) we wait on the model so one slow/looping
-    // call can't tie up the tick or the feed's background work.
-    maxRetries: 2,
-    timeout: { totalMs: 20_000 },
+    maxOutputTokens: MAX_ACTION_TOKENS,
+    output: Output.object({ schema: ActionSchema }),
   })
   return experimental_output
 }
@@ -176,7 +186,7 @@ async function resolveCounterparty(agent: TickAgent, name: string | null) {
 // same pair can't create duplicate rows that would double-count sentiment.
 // Runs inside the trade tx.
 async function bumpRelationship(
-  client: any,
+  client: ClientBase,
   a: string,
   b: string,
   delta: number,
@@ -291,46 +301,48 @@ async function commitAction(agent: TickAgent, action: AgentAction): Promise<Comm
   })
 }
 
-async function commitWithRetry(agent: TickAgent, action: AgentAction): Promise<CommitOutcome> {
-  let lastErr: unknown
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      return await commitAction(agent, action)
-    } catch (err: any) {
-      lastErr = err
-      if (err?.code === "40001" && attempt < MAX_RETRIES - 1) {
-        await new Promise((r) => setTimeout(r, 30 * 2 ** attempt + Math.random() * 30))
-        continue
-      }
-      throw err
-    }
-  }
-  throw lastErr
+function setLastAttempt(agentId: string, at: string | null) {
+  return retryOnConflict(() => query(`UPDATE agents SET last_attempt_at = $1 WHERE id = $2`, [at, agentId]))
 }
+
+export type StopReason = "paused" | "cap" | "deadline"
 
 export interface TickResult {
   ticked: number
   skipped: number
   errors: number
+  stopReason: StopReason | null
 }
 
-export async function runTick(count = 3): Promise<TickResult> {
+export async function runTick({ count, deadlineAt }: { count: number; deadlineAt: number }): Promise<TickResult> {
   const agents = await selectAgentsForTick(count)
   let ticked = 0
   let skipped = 0
   let errors = 0
+  let stopReason: StopReason | null = null
 
   for (const agent of agents) {
+    if (Date.now() > deadlineAt - MIN_MS_TO_START_AGENT) {
+      stopReason = "deadline"
+      break
+    }
     try {
+      await setLastAttempt(agent.id, new Date().toISOString())
       const action = await decideAction(agent)
-      const outcome = await commitWithRetry(agent, action)
+      const outcome = await retryOnConflict(() => commitAction(agent, action))
       if (outcome.status === "ok") ticked++
       else skipped++
     } catch (err) {
+      if (err instanceof SpendBlockedError) {
+        // The model never ran, so this agent hasn't used its turn.
+        await setLastAttempt(agent.id, agent.lastAttemptAt)
+        stopReason = err.reason
+        break
+      }
       console.error("[polis] tick error for agent", agent.name, err)
       errors++
     }
   }
 
-  return { ticked, skipped, errors }
+  return { ticked, skipped, errors, stopReason }
 }

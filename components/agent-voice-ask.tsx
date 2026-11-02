@@ -3,7 +3,8 @@
 // otherwise by typing — and hear it answer in first person about what it's been
 // doing. Voice in: mic -> 16kHz mono PCM -> /api/transcribe (Amazon Transcribe).
 // Voice out: /api/speak (Amazon Polly), with the browser's speech synthesis as a
-// fallback. Both AWS routes reuse the app's OIDC role; everything fails soft.
+// fallback. Both AWS routes reuse the app's OIDC role; everything fails soft. With
+// voice off, this is typed questions and the browser voice only.
 "use client"
 
 import { useEffect, useRef, useState } from "react"
@@ -30,24 +31,39 @@ function floatChunksToPcm16(chunks: Float32Array[], inRate: number, outRate: num
   return new Uint8Array(pcm.buffer)
 }
 
-export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentName: string }) {
+// Older Safari only exposes the prefixed constructor.
+function audioContextClass() {
+  const w = window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }
+  return w.AudioContext || w.webkitAudioContext
+}
+
+export function AgentVoiceAsk({
+  agentId,
+  agentName,
+  voiceEnabled,
+}: {
+  agentId: string
+  agentName: string
+  voiceEnabled: boolean
+}) {
   const [micSupported, setMicSupported] = useState(false)
   const [listening, setListening] = useState(false)
   const [question, setQuestion] = useState("")
   const [answer, setAnswer] = useState("")
   const [thinking, setThinking] = useState(false)
+  const [notice, setNotice] = useState("")
 
   const streamRef = useRef<MediaStream | null>(null)
-  const ctxRef = useRef<any>(null)
-  const procRef = useRef<any>(null)
+  const ctxRef = useRef<AudioContext | null>(null)
+  const procRef = useRef<ScriptProcessorNode | null>(null)
   const chunksRef = useRef<Float32Array[]>([])
   const audioElRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     if (typeof window === "undefined") return
     const hasMic = Boolean(navigator.mediaDevices?.getUserMedia)
-    const hasCtx = Boolean((window as any).AudioContext || (window as any).webkitAudioContext)
-    setMicSupported(hasMic && hasCtx)
+    const hasCtx = Boolean(audioContextClass())
+    setMicSupported(voiceEnabled && hasMic && hasCtx)
     return () => {
       // best-effort cleanup if we unmount mid-capture
       try {
@@ -61,7 +77,7 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
         // ignore
       }
     }
-  }, [])
+  }, [voiceEnabled])
 
   // ---- voice out: Polly, falling back to the browser voice ----
   function browserSpeak(text: string) {
@@ -77,6 +93,7 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
 
   async function speak(text: string) {
     if (!text) return
+    if (!voiceEnabled) return browserSpeak(text)
     try {
       const res = await fetch("/api/speak", {
         method: "POST",
@@ -103,6 +120,7 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
     if (!q || thinking) return
     setThinking(true)
     setAnswer("")
+    setNotice("")
     try {
       const res = await fetch(`/api/ask/${agentId}`, {
         method: "POST",
@@ -112,6 +130,8 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
       const data = await res.json()
       const a = typeof data?.answer === "string" ? data.answer : ""
       setAnswer(a)
+      if (res.status === 429) setNotice(`Give ${agentName} a moment before asking again.`)
+      else if (res.status === 503) setNotice(`${agentName} can't answer right now. Try again later.`)
       if (a) speak(a)
     } catch {
       setAnswer("")
@@ -125,7 +145,8 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+      const Ctx = audioContextClass()
+      if (!Ctx) throw new Error("no audio context")
       const ctx = new Ctx()
       await ctx.resume?.()
       ctxRef.current = ctx
@@ -133,7 +154,7 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
       const proc = ctx.createScriptProcessor(4096, 1, 1)
       procRef.current = proc
       chunksRef.current = []
-      proc.onaudioprocess = (e: any) => {
+      proc.onaudioprocess = (e: AudioProcessingEvent) => {
         chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)))
       }
       source.connect(proc)
@@ -242,6 +263,8 @@ export function AgentVoiceAsk({ agentId, agentName }: { agentId: string; agentNa
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             {agentName} is thinking…
           </p>
+        ) : notice ? (
+          <p className="mt-4 text-sm text-muted-foreground">{notice}</p>
         ) : answer ? (
           <div className="mt-4 flex items-start gap-3">
             <p className="min-w-0 flex-1 text-pretty text-sm italic leading-relaxed text-foreground">{answer}</p>

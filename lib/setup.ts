@@ -25,6 +25,9 @@ const DDL: string[] = [
   )`,
   // Add owner_token to tables created before ownership existed (idempotent).
   `ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_token UUID`,
+  // DSQL only allows a name and type on ADD COLUMN, one column per statement.
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_ask_at TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS world_events (
     id UUID PRIMARY KEY,
     agent_id UUID,
@@ -58,6 +61,25 @@ const DDL: string[] = [
     updated_at TIMESTAMPTZ,
     PRIMARY KEY (agent_id, other_id)
   )`,
+  // One row per scheduled slot. The primary key is what lets only one trigger run
+  // a slot; finished_at stays NULL if the worker dies midway.
+  `CREATE TABLE IF NOT EXISTS tick_runs (
+    slot VARCHAR(30) PRIMARY KEY,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    ticked INT,
+    skipped INT,
+    errors INT,
+    stop_reason VARCHAR(16)
+  )`,
+  // The shared model budget: reserved_micros is the day's estimated spend in
+  // millionths of a dollar, including calls still in flight.
+  `CREATE TABLE IF NOT EXISTS spend_days (
+    day VARCHAR(10) PRIMARY KEY,
+    reserved_micros BIGINT DEFAULT 0,
+    calls INT DEFAULT 0,
+    updated_at TIMESTAMPTZ
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
@@ -84,8 +106,8 @@ export async function claimSeed(): Promise<boolean> {
          ON CONFLICT (counter_name, shard) DO NOTHING`,
       )
       return (r.rowCount ?? 0) === 1
-    } catch (err: any) {
-      if (err?.code === "40001" && attempt === 0) continue
+    } catch (err) {
+      if ((err as { code?: string })?.code === "40001" && attempt === 0) continue
       throw err
     }
   }

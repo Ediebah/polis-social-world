@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import useSWR from "swr"
+import { relativeTime } from "@/lib/format"
 import type { FeedItem, WorldCounts } from "@/lib/types"
 import { FeedRow } from "./feed-row"
 import { cn } from "@/lib/utils"
@@ -9,6 +10,7 @@ import { cn } from "@/lib/utils"
 interface FeedResponse {
   feed: FeedItem[]
   counts: WorldCounts
+  lastUpdateAt: string | null
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -26,13 +28,15 @@ function Counter({ label, value }: { label: string; value: number }) {
 
 export function WorldFeed({ initialData }: { initialData: FeedResponse }) {
   const { data } = useSWR<FeedResponse>("/api/feed", fetcher, {
-    refreshInterval: 4000,
+    // The city updates every 15 minutes, so there's no need to poll any faster.
+    refreshInterval: 30_000,
     fallbackData: initialData,
     revalidateOnFocus: true,
   })
 
   const feed = data?.feed ?? []
   const counts = data?.counts ?? { population: 0, total_actions: 0 }
+  const lastUpdateAt = data?.lastUpdateAt ?? null
 
   // Track which items are newly arrived so we can animate only those.
   const seenRef = useRef<Set<string>>(new Set(initialData.feed.map((i) => i.id)))
@@ -66,7 +70,9 @@ export function WorldFeed({ initialData }: { initialData: FeedResponse }) {
       <section aria-label="World feed">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-medium text-foreground">The world, as it happens</h2>
-          <span className="font-mono text-[11px] text-muted-foreground">refreshes every 4s</span>
+          <span suppressHydrationWarning className="font-mono text-[11px] text-muted-foreground">
+            {lastUpdateAt ? `last update ${relativeTime(lastUpdateAt)}` : "no updates yet"}
+          </span>
         </div>
 
         {feed.length === 0 ? (

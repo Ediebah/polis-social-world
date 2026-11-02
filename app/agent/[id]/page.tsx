@@ -12,6 +12,7 @@ import { Coins, MapPin, Star, Target, Users } from "lucide-react"
 import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 import { AgentJournal } from "@/components/agent-journal"
 import { AgentVoiceAsk } from "@/components/agent-voice-ask"
+import { voiceEnabled } from "@/lib/aws"
 
 export const dynamic = "force-dynamic"
 
@@ -147,7 +148,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
 
         <AgentJournal agentId={agent.id} />
 
-        <AgentVoiceAsk agentId={agent.id} agentName={agent.name} />
+        {isOwner && <AgentVoiceAsk agentId={agent.id} agentName={agent.name} voiceEnabled={voiceEnabled()} />}
 
         <section className="mt-8 grid gap-6 lg:grid-cols-5">
           <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>

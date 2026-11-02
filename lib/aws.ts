@@ -7,6 +7,13 @@ import { awsCredentialsProvider } from "@vercel/functions/oidc"
 
 export const AWS_REGION = process.env.AWS_REGION as string
 
+// Polly and Transcribe are paid, sit outside the model budget, and their routes have
+// no owner check or rate limit yet, so add those before setting VOICE_ENABLED=1 on a
+// public deployment. While off, the UI uses the browser voice and typed input.
+export function voiceEnabled() {
+  return process.env.VOICE_ENABLED === "1"
+}
+
 export function awsCredentials() {
   return awsCredentialsProvider({
     roleArn: process.env.AWS_ROLE_ARN as string,
