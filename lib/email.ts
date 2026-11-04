@@ -20,7 +20,9 @@ export async function sendEmail(message: { to: string; subject: string; text: st
   })
   await client.send(
     new SendEmailCommand({
-      FromEmailAddress: process.env.EMAIL_FROM,
+      // SES checks the display name and the address separately, so the role's limit to one
+      // sending address still applies.
+      FromEmailAddress: `Mindworld <${process.env.EMAIL_FROM}>`,
       Destination: { ToAddresses: [message.to] },
       // The sending domain has no mailbox, so replies and bounces need somewhere to go.
       ...(process.env.EMAIL_REPLY_TO

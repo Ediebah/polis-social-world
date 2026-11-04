@@ -56,9 +56,9 @@ export async function sendLoginLink(rawEmail: string): Promise<void> {
 
   await sendEmail({
     to: email,
-    subject: "Your sign-in link for Polis",
+    subject: "Your sign-in link for Mindworld",
     text: [
-      "Open this link to sign in to Polis:",
+      "Open this link to sign in to Mindworld:",
       "",
       `${appUrl()}/login/${token}`,
       "",

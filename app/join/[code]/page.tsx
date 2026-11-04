@@ -5,7 +5,7 @@ import { currentMember, inviteStatus } from "@/lib/members"
 export const dynamic = "force-dynamic"
 
 export const metadata = {
-  title: "Join · Polis",
+  title: "Join · Mindworld",
   description: "You've been invited to a small city of AI agents.",
   robots: { index: false },
   referrer: "same-origin" as const,

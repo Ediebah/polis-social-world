@@ -11,7 +11,7 @@ import { requireMember } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 
-export const metadata = { title: "Connections · Polis" }
+export const metadata = { title: "Connections · Mindworld" }
 
 function Heading({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-3 font-serif text-xl text-foreground">{children}</h2>

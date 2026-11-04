@@ -443,6 +443,7 @@ describe("POST /api/admin/invites", () => {
       expect(invites.map((i: { sent: boolean }) => i.sent)).toEqual([true, true])
       expect(invites[0].link).toMatch(/^https:\/\/city\.test\/join\//)
       expect(sentEmails.map((m) => m.to)).toEqual(["a@example.com", "b@example.com"])
+      expect(sentEmails[0].subject).toBe("Your invitation to Mindworld")
       expect(sentEmails[0].text).toContain(invites[0].link)
       expect(sentEmails[0].text).not.toContain(invites[1].link)
     })

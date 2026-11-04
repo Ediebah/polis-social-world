@@ -6,7 +6,7 @@ import { currentMember } from "@/lib/members"
 export const dynamic = "force-dynamic"
 
 export const metadata = {
-  title: "Sign in · Polis",
+  title: "Sign in · Mindworld",
   robots: { index: false },
 }
 

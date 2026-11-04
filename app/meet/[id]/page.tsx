@@ -9,7 +9,7 @@ import { getAgentById } from "@/lib/queries"
 
 export const dynamic = "force-dynamic"
 
-export const metadata = { title: "Ask to meet · Polis" }
+export const metadata = { title: "Ask to meet · Mindworld" }
 
 const STATE_TEXT = {
   asked: "You've asked. You'll see their contact details in Connections if they accept.",

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic"
 // Not "no-referrer": that sends "Origin: null" on a form post before the page's JavaScript
 // has loaded, and the framework then refuses the action as cross-site.
 export const metadata = {
-  title: "Sign in · Polis",
+  title: "Sign in · Mindworld",
   robots: { index: false },
   referrer: "same-origin" as const,
 }

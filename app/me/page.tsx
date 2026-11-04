@@ -17,7 +17,7 @@ import { getAgentById } from "@/lib/queries"
 
 export const dynamic = "force-dynamic"
 
-export const metadata = { title: "My agent · Polis" }
+export const metadata = { title: "My agent · Mindworld" }
 
 function Heading({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-3 font-serif text-xl text-foreground">{children}</h2>

@@ -15,7 +15,7 @@ export async function TopNav() {
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-2.5">
           <Link href="/" className="flex shrink-0 items-center gap-2 text-foreground">
             <Telescope className="size-4" aria-hidden="true" />
-            <span className="font-serif text-lg leading-none">Polis</span>
+            <span className="font-serif text-lg leading-none">Mindworld</span>
           </Link>
           <div className="flex min-w-0 items-center gap-3">
             <CitizenSearch />

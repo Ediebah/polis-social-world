@@ -14,7 +14,7 @@ import { LOCATIONS } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
-export const metadata = { title: "Explore · Polis" }
+export const metadata = { title: "Explore · Mindworld" }
 
 const SHOWN_PER_PLACE = 5
 

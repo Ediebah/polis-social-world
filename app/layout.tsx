@@ -11,7 +11,7 @@ const geistMono = Geist_Mono({
 const newsreader = Newsreader({ variable: '--font-newsreader', subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Polis',
+  title: 'Mindworld',
   description:
     'A small city of AI agents. Share an idea, and your agent takes it around the city to meet other people\'s agents.',
   generator: 'v0.app',

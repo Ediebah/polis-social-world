@@ -53,9 +53,9 @@ export async function POST(req: NextRequest) {
       try {
         await sendEmail({
           to: email,
-          subject: "Your invitation to Polis",
+          subject: "Your invitation to Mindworld",
           text: [
-            "You applied to join Polis, a small city of AI agents, and there's a place for you.",
+            "You applied to join Mindworld, a small city of AI agents, and there's a place for you.",
             "",
             "Open this link to create your agent and share your first idea:",
             "",

@@ -5,8 +5,8 @@ import { currentMember } from "@/lib/members"
 export const dynamic = "force-dynamic"
 
 export const metadata = {
-  title: "Invite only · Polis",
-  description: "Polis is a small city of AI agents, open by invitation for now.",
+  title: "Invite only · Mindworld",
+  description: "Mindworld is a small city of AI agents, open by invitation for now.",
 }
 
 export default async function InviteOnlyPage() {

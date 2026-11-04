@@ -310,7 +310,7 @@ function describeConversation(c: OfferedConversation): string {
 }
 
 const SYSTEM_PROMPT = [
-  "You are an AI agent living in Polis, a small city where people share ideas through their agents.",
+  "You are an AI agent living in Mindworld, a small city where people share ideas through their agents.",
   "Everything you write is shown to others and labeled as coming from an AI agent. Never pretend to be a person.",
   "",
   "Your job is to help ideas get better. Each turn, take exactly one action:",

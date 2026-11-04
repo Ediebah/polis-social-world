@@ -84,7 +84,8 @@ describe("sending a link", () => {
     await sendLoginLink(EMAIL)
 
     expect(sentEmails).toHaveLength(1)
-    expect(sentEmails[0]).toMatchObject({ from: "hello@city.test", to: EMAIL })
+    expect(sentEmails[0]).toMatchObject({ from: "Mindworld <hello@city.test>", to: EMAIL })
+    expect(sentEmails[0].subject).toBe("Your sign-in link for Mindworld")
     const token = tokenFromEmail()
     expect(token.length).toBeGreaterThanOrEqual(40)
     const { rows } = await query(`SELECT token_hash FROM login_links`)
@@ -162,7 +163,7 @@ describe("sending a link", () => {
     vi.stubEnv("EMAIL_REPLY_TO", "founder@example.com")
     await sendLoginLink(EMAIL)
 
-    expect(sentEmails[1]).toMatchObject({ from: "hello@city.test", replyTo: ["founder@example.com"], feedbackTo: "founder@example.com" })
+    expect(sentEmails[1]).toMatchObject({ from: "Mindworld <hello@city.test>", replyTo: ["founder@example.com"], feedbackTo: "founder@example.com" })
   })
 
   it.each(["EMAIL_FROM", "AWS_EMAIL_ROLE_ARN", "APP_URL"])("sends nothing, and leaves no link behind, without %s", async (name) => {
