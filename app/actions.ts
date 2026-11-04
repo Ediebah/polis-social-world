@@ -3,6 +3,15 @@
 import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
+import {
+  addOwnerWords,
+  OwnerWordsError,
+  shareIdea,
+  type OwnerWordsRefusal,
+  MAX_IDEAS_PER_DAY,
+  MAX_OWNER_TEXT,
+  MAX_OWNER_WORDS_PER_CONVERSATION,
+} from "@/lib/conversations"
 import { nudgeAgentGoal, ownsAgent, spawnAgent, SpawnLimitError } from "@/lib/queries"
 import { LOCATIONS, TRAIT_OPTIONS } from "@/lib/types"
 
@@ -23,7 +32,7 @@ export async function spawnAgentAction(_prev: SpawnState, formData: FormData): P
   ).slice(0, 30)
   const backstory = String(formData.get("backstory") ?? "").trim()
   const goal = String(formData.get("goal") ?? "").trim()
-  const location = String(formData.get("location") ?? "plaza").trim()
+  const location = String(formData.get("location") ?? "commons").trim()
   // Only accept known trait values, so a hand-crafted POST can't store junk.
   const traits = formData
     .getAll("traits")
@@ -37,7 +46,7 @@ export async function spawnAgentAction(_prev: SpawnState, formData: FormData): P
   if (backstory.length > 1000) return { error: "That backstory is too long (max 1000 characters)." }
   if (goal.length < 5) return { error: "Give your agent a starting goal." }
   if (goal.length > GOAL_MAX) return { error: `That goal is too long (max ${GOAL_MAX} characters).` }
-  const loc = (LOCATIONS as readonly string[]).includes(location) ? location : "plaza"
+  const loc = (LOCATIONS as readonly string[]).includes(location) ? location : "commons"
 
   let agentId: string
   let ownerToken: string
@@ -80,4 +89,61 @@ export async function nudgeAction(formData: FormData): Promise<void> {
   await nudgeAgentGoal(agentId, goal)
   revalidatePath(`/agent/${agentId}`)
   revalidatePath("/")
+}
+
+// text and place come back with a refusal: React clears a form when its action finishes,
+// and nobody should lose what they wrote.
+export type OwnerWordsState = { error?: string; ok?: boolean; text?: string; place?: string }
+
+const OWNER_WORDS_MESSAGES: Record<OwnerWordsRefusal, string> = {
+  too_short: "That's too short to post.",
+  too_long: `That's too long (max ${MAX_OWNER_TEXT} characters).`,
+  closed: "This conversation has closed.",
+  limit: `You've posted the most you can here (${MAX_OWNER_WORDS_PER_CONVERSATION} times).`,
+  idea_limit: `You've shared the most ideas you can for today (${MAX_IDEAS_PER_DAY}).`,
+  slow_down: "Please wait a moment before posting again.",
+  bad_place: "Pick one of the city's places.",
+}
+
+function ownerWordsFailure(err: unknown): string {
+  if (err instanceof OwnerWordsError) return OWNER_WORDS_MESSAGES[err.reason]
+  console.error("[polis] owner words error:", err)
+  return "Something went wrong. Please try again."
+}
+
+export async function addWordsAction(_prev: OwnerWordsState, formData: FormData): Promise<OwnerWordsState> {
+  const agentId = String(formData.get("agentId") ?? "")
+  const conversationId = String(formData.get("conversationId") ?? "")
+  const text = String(formData.get("text") ?? "")
+
+  // Words go up under this citizen's owner, so only that owner may post them.
+  const token = (await cookies()).get(ownerCookie(agentId))?.value
+  if (!(await ownsAgent(agentId, token))) return { error: "Only this citizen's owner can post here.", text }
+
+  try {
+    await addOwnerWords(agentId, conversationId, text)
+  } catch (err) {
+    return { error: ownerWordsFailure(err), text }
+  }
+  revalidatePath(`/conversation/${conversationId}`)
+  revalidatePath("/")
+  return { ok: true }
+}
+
+export async function shareIdeaAction(_prev: OwnerWordsState, formData: FormData): Promise<OwnerWordsState> {
+  const agentId = String(formData.get("agentId") ?? "")
+  const place = String(formData.get("place") ?? "")
+  const text = String(formData.get("text") ?? "")
+
+  const token = (await cookies()).get(ownerCookie(agentId))?.value
+  if (!(await ownsAgent(agentId, token))) return { error: "Only this citizen's owner can share an idea.", text, place }
+
+  try {
+    await shareIdea(agentId, text, place)
+  } catch (err) {
+    return { error: ownerWordsFailure(err), text, place }
+  }
+  revalidatePath(`/agent/${agentId}`)
+  revalidatePath("/")
+  return { ok: true }
 }

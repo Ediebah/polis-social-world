@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS agents (
   name VARCHAR(60),
   persona JSONB,
   goal TEXT,
-  location VARCHAR(60) DEFAULT 'plaza',
+  location VARCHAR(60) DEFAULT 'commons',
   balance BIGINT DEFAULT 1000,
   reputation INT DEFAULT 0,
   next_tick_seq BIGINT DEFAULT 0,
@@ -39,6 +39,13 @@ COMMIT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_ask_at TIMESTAMPTZ;
 COMMIT;
 
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_words_at TIMESTAMPTZ;
+COMMIT;
+
+-- House agents are labeled, city-run characters with no human owner.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_house BOOLEAN;
+COMMIT;
+
 CREATE TABLE IF NOT EXISTS world_events (
   id UUID PRIMARY KEY,
   agent_id UUID,
@@ -47,6 +54,10 @@ CREATE TABLE IF NOT EXISTS world_events (
   location VARCHAR(60),
   created_at TIMESTAMPTZ
 );
+COMMIT;
+
+-- The idea or contribution an event is about, so its copy of the text can be found.
+ALTER TABLE world_events ADD COLUMN IF NOT EXISTS ref_id UUID;
 COMMIT;
 
 CREATE TABLE IF NOT EXISTS world_counters (
@@ -114,6 +125,64 @@ CREATE TABLE IF NOT EXISTS agent_journals (
 );
 COMMIT;
 
+-- A person's idea, in their exact words. Conversations start from these.
+CREATE TABLE IF NOT EXISTS ideas (
+  id UUID PRIMARY KEY,
+  agent_id UUID,
+  place VARCHAR(20),
+  text TEXT,
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- idea_id is NULL when a conversation started from one of the place's questions.
+-- agent_turns is what the length limit counts; people's own words don't use it up.
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY,
+  idea_id UUID,
+  place VARCHAR(20),
+  question TEXT,
+  opened_by UUID,
+  status VARCHAR(10),
+  agent_turns INT,
+  last_agent_id UUID,
+  created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- author_kind says whose words these are: 'owner' text is quoted exactly as written,
+-- and 'agent' text is always labeled as coming from the agent.
+CREATE TABLE IF NOT EXISTS contributions (
+  id UUID PRIMARY KEY,
+  conversation_id UUID,
+  agent_id UUID,
+  author_kind VARCHAR(10),
+  move VARCHAR(12),
+  text TEXT,
+  memory_id UUID,
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- A takeaway an agent kept from a conversation, in the agent's own words.
+CREATE TABLE IF NOT EXISTS memories (
+  id UUID PRIMARY KEY,
+  agent_id UUID,
+  conversation_id UUID,
+  text TEXT,
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
+CREATE TABLE IF NOT EXISTS follows (
+  agent_id UUID,
+  conversation_id UUID,
+  created_at TIMESTAMPTZ,
+  PRIMARY KEY (agent_id, conversation_id)
+);
+COMMIT;
+
 CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at);
 COMMIT;
 
@@ -124,4 +193,28 @@ CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id);
 COMMIT;
 
 CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_place ON ideas (place, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_agent ON ideas (agent_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_conversations_place ON conversations (place, status);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_conversations_idea ON conversations (idea_id);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_contributions_conversation ON contributions (conversation_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_contributions_agent ON contributions (agent_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_memories_agent ON memories (agent_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_ref ON world_events (ref_id);
 COMMIT;

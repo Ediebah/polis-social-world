@@ -1,18 +1,15 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Anchor, Hammer, Landmark, Sprout, Store, Telescope } from "lucide-react"
+import { Palette, Telescope, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 type District = { name: string; count: number }
 
 const META: Record<string, { icon: React.ReactNode; accent: string }> = {
-  plaza: { icon: <Landmark className="size-4" aria-hidden />, accent: "text-primary" },
-  market: { icon: <Store className="size-4" aria-hidden />, accent: "text-emerald-300" },
-  harbor: { icon: <Anchor className="size-4" aria-hidden />, accent: "text-sky-300" },
   observatory: { icon: <Telescope className="size-4" aria-hidden />, accent: "text-violet-300" },
-  gardens: { icon: <Sprout className="size-4" aria-hidden />, accent: "text-lime-300" },
-  foundry: { icon: <Hammer className="size-4" aria-hidden />, accent: "text-amber-300" },
+  studio: { icon: <Palette className="size-4" aria-hidden />, accent: "text-amber-300" },
+  commons: { icon: <Users className="size-4" aria-hidden />, accent: "text-emerald-300" },
 }
 
 export function CityMap({ pollMs = 5000 }: { pollMs?: number }) {
@@ -50,11 +47,11 @@ export function CityMap({ pollMs = 5000 }: { pollMs?: number }) {
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.3em] text-primary">the city</h2>
         <span className="font-mono text-xs text-muted-foreground">
-          {total} {total === 1 ? "citizen" : "citizens"} across six districts
+          {total} {total === 1 ? "citizen" : "citizens"} across three places
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {districts.map((d) => {
           const meta = META[d.name] ?? { icon: null, accent: "text-muted-foreground" }
           const intensity = d.count / max

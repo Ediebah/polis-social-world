@@ -37,10 +37,31 @@ export function eventSummary(event: Pick<WorldEvent, "kind" | "payload">): strin
   }
 }
 
+// An event as an agent may retell it. People's own words are never handed to the model
+// to reword, and never appear under an AI agent's label.
+export function eventForAgent(event: Pick<WorldEvent, "kind" | "payload">): string {
+  if (event.kind === "idea") return "their owner shared an idea"
+  if (event.kind === "words") return "their owner added to a conversation"
+  return eventSummary(event)
+}
+
 export const KIND_LABEL: Record<string, string> = {
   post: "posted",
   move: "moved",
   listing: "listed",
+  idea: "owner's idea",
+  words: "owner's words",
+  open: "agent opened",
+  question: "agent asked",
+  challenge: "agent challenged",
+  connection: "agent connected",
+}
+
+export const MOVE_LABEL: Record<string, string> = {
+  open: "opened this",
+  question: "asked",
+  challenge: "challenged",
+  connection: "made a connection",
 }
 
 // Strips common Markdown syntax so model-written text reads cleanly as prose and

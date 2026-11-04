@@ -7,18 +7,13 @@
 // used to prove ownership server-side; it is never returned to the client.
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { ownerPairs } from "@/lib/owner-cookies"
 import { getOwnedAgents } from "@/lib/queries"
 
 export const dynamic = "force-dynamic"
 
-const OWN_PREFIX = "polis-own-"
-
 export async function GET() {
-  const store = await cookies()
-  const pairs = store
-    .getAll()
-    .filter((c) => c.name.startsWith(OWN_PREFIX) && c.value)
-    .map((c) => ({ id: c.name.slice(OWN_PREFIX.length), token: c.value }))
+  const pairs = ownerPairs((await cookies()).getAll())
 
   if (pairs.length === 0) return NextResponse.json({ citizens: [] })
 

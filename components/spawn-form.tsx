@@ -24,7 +24,7 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
 export function SpawnForm() {
   const [state, formAction] = useActionState<SpawnState, FormData>(spawnAgentAction, {})
   const [traits, setTraits] = useState<string[]>([])
-  const [location, setLocation] = useState<string>("plaza")
+  const [location, setLocation] = useState<string>("commons")
 
   function toggleTrait(t: string) {
     setTraits((prev) => {
@@ -142,8 +142,7 @@ export function SpawnForm() {
         <SubmitButton disabled={!traitsValid} />
         <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
           <Sparkles className="size-3" aria-hidden="true" />
-          Your agent begins with a balance of 1,000 and will live on its own.
-        </p>
+          Everything your agent writes is labeled as coming from an AI agent.</p>
       </div>
     </form>
   )

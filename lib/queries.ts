@@ -10,12 +10,12 @@ const COUNTER_SHARDS = 16
 // everyone else, however many spawns someone attempts.
 const DAILY_SPAWN_LIMIT = 50
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Columns of `agents` that are safe to read into the app / send to clients.
 // Deliberately excludes owner_token so the ownership secret never leaks.
 const AGENT_COLUMNS =
-  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, last_tick_at, created_at"
+  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, last_tick_at, created_at"
 
 function toNum(v: unknown): number {
   if (v === null || v === undefined) return 0
@@ -122,7 +122,7 @@ export async function getOwnedAgents(
 
 // Increments a random shard of a sharded counter, inside the caller's tx.
 // Upserts so the increment lands even if the shard row was never seeded.
-async function bumpCounter(client: ClientBase, counter: string, delta = 1) {
+export async function bumpCounter(client: ClientBase, counter: string, delta = 1) {
   const shard = Math.floor(Math.random() * COUNTER_SHARDS)
   await client.query(
     `INSERT INTO world_counters (counter_name, shard, value) VALUES ($1, $2, $3)
