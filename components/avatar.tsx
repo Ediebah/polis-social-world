@@ -1,11 +1,9 @@
-// components/avatar.tsx
-// Deterministic citizen avatar. No images, no storage, no API: a unique gradient
-// tile + initials derived from the agent's id, so every citizen has a consistent,
-// distinct face. Safe to use in server components (no hooks).
+// A citizen's face, worked out from its id. No images, no storage, no API: every citizen
+// gets a consistent, distinct little character. Safe in server components (no hooks).
 
 type AvatarProps = {
   seed: string // pass the agent id (stable + unique)
-  name?: string // used for the initials and aria-label
+  name?: string // used for the aria-label
   size?: number
   className?: string
 }
@@ -20,20 +18,64 @@ function hashString(s: string): number {
   return h >>> 0
 }
 
-function initials(name?: string): string {
-  if (!name) return ""
-  const parts = name.trim().split(/\s+/)
-  const first = parts[0]?.[0] ?? ""
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : ""
-  return (first + last).toUpperCase()
+const INK = "rgba(16,19,29,0.86)"
+
+function Eyes({ kind }: { kind: number }) {
+  switch (kind) {
+    case 0:
+      return (
+        <>
+          <circle cx="28" cy="35" r="4.5" fill={INK} />
+          <circle cx="52" cy="35" r="4.5" fill={INK} />
+        </>
+      )
+    case 1:
+      return (
+        <>
+          <circle cx="28" cy="35" r="7.5" fill="rgba(255,255,255,0.92)" />
+          <circle cx="52" cy="35" r="7.5" fill="rgba(255,255,255,0.92)" />
+          <circle cx="30" cy="36" r="3.5" fill={INK} />
+          <circle cx="54" cy="36" r="3.5" fill={INK} />
+        </>
+      )
+    case 2:
+      return (
+        <path d="M22 35q6-6 12 0M46 35q6-6 12 0" fill="none" stroke={INK} strokeWidth="3.5" strokeLinecap="round" />
+      )
+    default:
+      return (
+        <>
+          <circle cx="28" cy="35" r="3.5" fill={INK} />
+          <path d="M46 35h12" stroke={INK} strokeWidth="3.5" strokeLinecap="round" />
+        </>
+      )
+  }
 }
+
+function Mouth({ kind }: { kind: number }) {
+  switch (kind) {
+    case 0:
+      return <path d="M30 52q10 9 20 0" fill="none" stroke={INK} strokeWidth="3.5" strokeLinecap="round" />
+    case 1:
+      return <path d="M32 54h16" stroke={INK} strokeWidth="3.5" strokeLinecap="round" />
+    case 2:
+      return <circle cx="40" cy="54" r="4.5" fill={INK} />
+    default:
+      return <path d="M30 56q5-6 10 0t10 0" fill="none" stroke={INK} strokeWidth="3.5" strokeLinecap="round" />
+  }
+}
+
+const SHAPES = [
+  <rect key="rounded" width="80" height="80" rx="24" fill="currentColor" />,
+  <circle key="round" cx="40" cy="40" r="40" fill="currentColor" />,
+  <path key="arch" d="M0 80V36a40 36 0 0 1 80 0v44z" fill="currentColor" />,
+  <path key="soft" d="M40 0c26 0 40 12 40 40S66 80 40 80 0 68 0 40 14 0 40 0z" fill="currentColor" />,
+]
 
 export function Avatar({ seed, name, size = 40, className }: AvatarProps) {
   const h = hashString(seed)
-  const hue1 = h % 360
-  const hue2 = (hue1 + 40 + ((h >> 8) % 80)) % 360
-  const rot = (h >> 16) % 360
-  const gid = `av${h.toString(36)}`
+  const hue = h % 360
+  // Unsigned shifts: h can be above 2^31, and >> would turn it negative.
 
   return (
     <svg
@@ -41,36 +83,13 @@ export function Avatar({ seed, name, size = 40, className }: AvatarProps) {
       height={size}
       viewBox="0 0 80 80"
       className={className}
+      style={{ color: `oklch(0.8 0.1 ${hue})` }}
       role="img"
-      aria-label={name ? `${name} avatar` : "citizen avatar"}
+      aria-label={name ? `${name}'s avatar` : "citizen avatar"}
     >
-      <defs>
-        <linearGradient id={gid} gradientTransform={`rotate(${rot} 0.5 0.5)`}>
-          <stop offset="0%" stopColor={`hsl(${hue1} 62% 56%)`} />
-          <stop offset="100%" stopColor={`hsl(${hue2} 64% 40%)`} />
-        </linearGradient>
-      </defs>
-      <rect width="80" height="80" rx="22" fill={`url(#${gid})`} />
-      <circle
-        cx={18 + (h % 44)}
-        cy={16 + ((h >> 5) % 44)}
-        r={9 + (h % 7)}
-        fill="rgba(255,255,255,0.16)"
-      />
-      {name ? (
-        <text
-          x="40"
-          y="41"
-          textAnchor="middle"
-          dominantBaseline="central"
-          fontFamily="ui-sans-serif, system-ui, sans-serif"
-          fontSize="29"
-          fontWeight="600"
-          fill="rgba(255,255,255,0.96)"
-        >
-          {initials(name)}
-        </text>
-      ) : null}
+      {SHAPES[(h >>> 3) % SHAPES.length]}
+      <Eyes kind={(h >>> 6) % 4} />
+      <Mouth kind={(h >>> 9) % 4} />
     </svg>
   )
 }

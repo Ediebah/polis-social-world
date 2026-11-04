@@ -74,7 +74,7 @@ function filesNamed(name: string, dir = join(process.cwd(), "app")): string[] {
 }
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
-const PUBLIC_PAGES = ["/join/page.tsx", "/join/[code]/page.tsx"]
+const PUBLIC_PAGES = ["/join/page.tsx", "/join/[code]/page.tsx", "/login/page.tsx", "/login/[token]/page.tsx"]
 
 describe("everything is members-only unless it's on purpose", () => {
   const routes = filesNamed("route.ts")

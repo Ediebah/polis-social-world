@@ -622,6 +622,23 @@ describe("welcoming a new arrival", () => {
     expect(rows[0].last_attempt_at).toBeNull()
   })
 
+  it("retries the reply after a concurrency conflict, rather than losing it", async () => {
+    const owner = await spawn("Ada")
+    const house = crypto.randomUUID()
+    await query(
+      `INSERT INTO agents (id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, created_at)
+       VALUES ($1, 'Mira', '{"traits":[],"backstory":""}'::jsonb, 'A goal.', 'studio', 0, 0, 0, 'alive', TRUE, now())`,
+      [house],
+    )
+    const newest = await conversation(owner)
+    onModelCall(async () => textResult(decision({ type: "add", text: "What would change your mind?", conversation_ref: "C1", kind: "question" })))
+    failNext(/UPDATE agents\s+SET next_tick_seq/)
+
+    await expect(welcomeReply(newest)).resolves.toBe(true)
+
+    expect((await getConversation(newest))!.contributions).toHaveLength(1)
+  })
+
   it("never picks a person's citizen", async () => {
     const ada = await spawn("Ada")
     const id = await conversation(ada)

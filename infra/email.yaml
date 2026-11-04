@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Email for Polis - an SES sending domain, its DNS records, and a role Vercel can use to send from one address.
+
+Parameters:
+  DomainName:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    Description: The domain mail comes from.
+  FromAddress:
+    Type: String
+    AllowedPattern: "^[a-z0-9._+-]+@[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    Description: The one address the app may send from, at DomainName.
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: The domain's Route 53 hosted zone. Leave empty if DNS is elsewhere, and add the records from the outputs by hand.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: The ARN of this account's Vercel OIDC provider, if it has one. An account can only hold one per URL. Leave empty to create it.
+
+Conditions:
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, ""]]
+  CreateOidcProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+
+Resources:
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref DomainName
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      MailFromAttributes:
+        MailFromDomain: !Sub mail.${DomainName}
+        BehaviorOnMxFailure: USE_DEFAULT_VALUE
+
+  # CloudFormation fails rather than overwrites if any of these records already exists.
+  DnsRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Comment: Amazon SES domain authentication records
+      RecordSets:
+        - Name: !GetAtt EmailIdentity.DkimDNSTokenName1
+          Type: CNAME
+          TTL: "1800"
+          ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue1]
+        - Name: !GetAtt EmailIdentity.DkimDNSTokenName2
+          Type: CNAME
+          TTL: "1800"
+          ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue2]
+        - Name: !GetAtt EmailIdentity.DkimDNSTokenName3
+          Type: CNAME
+          TTL: "1800"
+          ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue3]
+        - Name: !Sub mail.${DomainName}
+          Type: MX
+          TTL: "1800"
+          ResourceRecords: [!Sub "10 feedback-smtp.${AWS::Region}.amazonses.com"]
+        - Name: !Sub mail.${DomainName}
+          Type: TXT
+          TTL: "1800"
+          ResourceRecords: ['"v=spf1 include:amazonses.com ~all"']
+        - Name: !Sub _dmarc.${DomainName}
+          Type: TXT
+          TTL: "1800"
+          ResourceRecords: ['"v=DMARC1; p=none;"']
+
+  VercelOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://oidc.vercel.com/divinee-3594s-projects
+      ClientIdList:
+        - https://vercel.com/divinee-3594s-projects
+
+  # Only this project's production deployments can use this role.
+  EmailSenderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Lets the Polis production deployment send email from one address through SES.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If [CreateOidcProvider, !GetAtt VercelOidcProvider.Arn, !Ref ExistingOidcProviderArn]
+            Condition:
+              StringEquals:
+                "oidc.vercel.com/divinee-3594s-projects:aud": https://vercel.com/divinee-3594s-projects
+                "oidc.vercel.com/divinee-3594s-projects:sub": owner:divinee-3594s-projects:project:polis-social-world:environment:production
+      Policies:
+        - PolicyName: send-from-one-address
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # identity/* rather than only the domain, so test sends to a verified recipient
+              # aren't denied while the account is in the SES sandbox. The condition is what
+              # limits this to one sender.
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref FromAddress
+
+Outputs:
+  EmailRoleArn:
+    Description: Set as AWS_EMAIL_ROLE_ARN in Vercel.
+    Value: !GetAtt EmailSenderRole.Arn
+  EmailRegion:
+    Description: Set as AWS_EMAIL_REGION in Vercel.
+    Value: !Ref AWS::Region
+  EmailFrom:
+    Description: Set as EMAIL_FROM in Vercel. The role can only send from this address.
+    Value: !Ref FromAddress
+  DkimRecord1:
+    Description: CNAME to add by hand if DNS is outside Route 53.
+    Value: !Sub "${EmailIdentity.DkimDNSTokenName1} CNAME ${EmailIdentity.DkimDNSTokenValue1}"
+  DkimRecord2:
+    Description: CNAME to add by hand if DNS is outside Route 53.
+    Value: !Sub "${EmailIdentity.DkimDNSTokenName2} CNAME ${EmailIdentity.DkimDNSTokenValue2}"
+  DkimRecord3:
+    Description: CNAME to add by hand if DNS is outside Route 53.
+    Value: !Sub "${EmailIdentity.DkimDNSTokenName3} CNAME ${EmailIdentity.DkimDNSTokenValue3}"
+  MailFromMxRecord:
+    Description: MX record to add by hand if DNS is outside Route 53.
+    Value: !Sub "mail.${DomainName} MX 10 feedback-smtp.${AWS::Region}.amazonses.com"
+  MailFromSpfRecord:
+    Description: TXT record to add by hand if DNS is outside Route 53.
+    Value: !Sub 'mail.${DomainName} TXT "v=spf1 include:amazonses.com ~all"'
+  DmarcRecord:
+    Description: TXT record to add by hand if DNS is outside Route 53.
+    Value: !Sub '_dmarc.${DomainName} TXT "v=DMARC1; p=none;"'

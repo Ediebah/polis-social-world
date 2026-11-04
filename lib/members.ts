@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { NextResponse, type NextRequest } from "next/server"
-import { insertIdea, followConversation } from "./conversations"
+import { followConversation, followPlace, insertIdea } from "./conversations"
 import { query, transaction } from "./db"
 import { retryOnConflict } from "./occ"
 import { ownerPairs } from "./owner-cookies"
@@ -48,23 +48,49 @@ function hashCode(code: string): string {
   return createHash("sha256").update(code).digest("hex")
 }
 
-export async function createInvites(count: number, note: string | null = null): Promise<string[]> {
-  const codes = Array.from({ length: count }, () => randomBytes(24).toString("base64url"))
-  const now = new Date().toISOString()
-  await transaction(async (client) => {
-    for (const code of codes) {
-      await client.query(`INSERT INTO invites (code_hash, note, created_at) VALUES ($1, $2, $3)`, [hashCode(code), note, now])
-    }
-  })
-  return codes
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
 }
 
-export async function inviteStatus(code: string): Promise<"open" | "used" | "unknown"> {
-  const { rows } = await query<{ used_at: string | null }>(`SELECT used_at FROM invites WHERE code_hash = $1`, [
-    hashCode(code),
-  ])
-  if (rows.length === 0) return "unknown"
-  return rows[0].used_at ? "used" : "open"
+export interface CreatedInvite {
+  email: string
+  code: string
+}
+
+// Each invite is for one address, chosen by whoever sends it. That address is where
+// sign-in links go, so nobody joining gets to name it: they can't claim someone else's,
+// and can't use the form to find out who's already here.
+export async function createInvites(
+  emails: string[],
+  note: string | null = null,
+): Promise<{ created: CreatedInvite[]; skipped: string[] }> {
+  const wanted = [...new Set(emails.map(normalizeEmail))]
+  const members = await query<{ email: string }>(`SELECT email FROM members WHERE email = ANY($1)`, [wanted])
+  const taken = new Set(members.rows.map((m) => m.email))
+  const created = wanted
+    .filter((email) => !taken.has(email))
+    .map((email) => ({ email, code: randomBytes(24).toString("base64url") }))
+  const now = new Date().toISOString()
+  await transaction(async (client) => {
+    for (const { email, code } of created) {
+      await client.query(`INSERT INTO invites (code_hash, email, note, created_at) VALUES ($1, $2, $3, $4)`, [
+        hashCode(code),
+        email,
+        note,
+        now,
+      ])
+    }
+  })
+  return { created, skipped: wanted.filter((email) => taken.has(email)) }
+}
+
+export async function inviteStatus(code: string): Promise<{ status: "open" | "used" | "unknown"; email: string | null }> {
+  const { rows } = await query<{ used_at: string | null; email: string }>(
+    `SELECT used_at, email FROM invites WHERE code_hash = $1`,
+    [hashCode(code)],
+  )
+  if (rows.length === 0) return { status: "unknown", email: null }
+  return { status: rows[0].used_at ? "used" : "open", email: rows[0].email }
 }
 
 export async function inviteCounts(): Promise<{ total: number; used: number }> {
@@ -74,10 +100,10 @@ export async function inviteCounts(): Promise<{ total: number; used: number }> {
   return { total: Number(rows[0].total), used: Number(rows[0].used) }
 }
 
-export type JoinRefusal = "invite" | "email_taken"
-
+// Whether an invite was used or its address already has a citizen, the person holding it
+// hears the same thing. A taken name is the only reason they can do something about.
 export class JoinError extends Error {
-  constructor(readonly reason: JoinRefusal) {
+  constructor(readonly reason: "invite" | "name" = "invite") {
     super(`join refused: ${reason}`)
     this.name = "JoinError"
   }
@@ -85,7 +111,6 @@ export class JoinError extends Error {
 
 export interface JoinInput {
   code: string
-  email: string
   name: string
   traits: string[]
   interests: string
@@ -102,15 +127,21 @@ export interface JoinResult {
 // One atomic transaction: if anything fails, the invite stays unused and nothing is left
 // behind. The first idea opens its conversation right away, so a house agent can answer.
 export function joinWithInvite(input: JoinInput): Promise<JoinResult> {
-  const email = input.email.trim().toLowerCase()
   return retryOnConflict(() =>
     transaction(async (client) => {
       const now = new Date().toISOString()
       const invite = await client.query(
-        `UPDATE invites SET used_at = $1 WHERE code_hash = $2 AND used_at IS NULL`,
+        `UPDATE invites SET used_at = $1 WHERE code_hash = $2 AND used_at IS NULL AND email IS NOT NULL`,
         [now, hashCode(input.code)],
       )
-      if (invite.rowCount !== 1) throw new JoinError("invite")
+      if (invite.rowCount !== 1) throw new JoinError()
+      const { rows } = await client.query<{ email: string }>(`SELECT email FROM invites WHERE code_hash = $1`, [
+        hashCode(input.code),
+      ])
+
+      // A name is how everyone tells citizens apart, house agents included.
+      const taken = await client.query(`SELECT 1 FROM agents WHERE lower(name) = lower($1) LIMIT 1`, [input.name])
+      if (taken.rows.length > 0) throw new JoinError("name")
 
       const { id, ownerToken } = await createCitizen(client, {
         handle: input.name.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 30) || "citizen",
@@ -126,9 +157,9 @@ export function joinWithInvite(input: JoinInput): Promise<JoinResult> {
       const member = await client.query(
         `INSERT INTO members (email, agent_id, created_at) VALUES ($1, $2, $3)
          ON CONFLICT (email) DO NOTHING`,
-        [email, id, now],
+        [rows[0].email, id, now],
       )
-      if (member.rowCount !== 1) throw new JoinError("email_taken")
+      if (member.rowCount !== 1) throw new JoinError()
       await client.query(`UPDATE invites SET agent_id = $1 WHERE code_hash = $2`, [id, hashCode(input.code)])
 
       const conversationId = crypto.randomUUID()
@@ -145,6 +176,7 @@ export function joinWithInvite(input: JoinInput): Promise<JoinResult> {
         [conversationId, ideaId, input.place, id, now],
       )
       await followConversation(client, id, conversationId, now)
+      await followPlace(client, id, input.place, now)
       return { id, ownerToken, conversationId }
     }),
   )

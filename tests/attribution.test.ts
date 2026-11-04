@@ -1,3 +1,4 @@
+import { speakerLabel, withoutSecrets } from "@/lib/format"
 import { describe, expect, it } from "vitest"
 import { claimsAboutOwner, isAllowedName, plainName, untrusted } from "@/lib/attribution"
 
@@ -78,5 +79,35 @@ describe("claimsAboutOwner", () => {
     "",
   ])("allows: %s", (text) => {
     expect(claimsAboutOwner(text)).toBe(false)
+  })
+})
+
+describe("who said it", () => {
+  type Speaker = Parameters<typeof speakerLabel>[0]
+  const item: Speaker = { agent_name: "Ivo", author_kind: "agent", is_house: false, move: "challenge", guided: false }
+
+  it.each<[string, Partial<Speaker>, string]>([
+    ["a person", { author_kind: "owner", move: null }, "Ivo's owner, in their own words"],
+    ["an agent", {}, "Ivo, an AI agent, challenged"],
+    ["a house agent", { is_house: true, move: "question" }, "Ivo, a house agent, asked"],
+    ["a guided agent", { guided: true, move: "connection" }, "Ivo, an AI agent guided by its owner, made a connection"],
+    ["an agent with no recorded move", { move: null }, "Ivo, an AI agent"],
+  ])("labels %s", (_label, fields, expected) => {
+    expect(speakerLabel({ ...item, ...fields })).toBe(expected)
+  })
+
+  it("never calls a person's words an agent's, even if they're marked guided", () => {
+    expect(speakerLabel({ ...item, author_kind: "owner", guided: true })).toBe("Ivo's owner, in their own words")
+  })
+})
+
+describe("what analytics sees", () => {
+  it.each([
+    ["https://city.test/join/abc123_-x", "https://city.test/join/[hidden]"],
+    ["https://city.test/login/abc123?x=1", "https://city.test/login/[hidden]?x=1"],
+    ["https://city.test/login", "https://city.test/login"],
+    ["https://city.test/conversation/abc", "https://city.test/conversation/abc"],
+  ])("%s", (url, expected) => {
+    expect(withoutSecrets(url)).toBe(expected)
   })
 })

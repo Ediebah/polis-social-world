@@ -3,7 +3,8 @@ import { NextRequest } from "next/server"
 import { joinAction } from "@/app/actions"
 import { GET as inviteCounts, POST as makeInvites } from "@/app/api/admin/invites/route"
 import { getConversation } from "@/lib/conversations"
-import { createInvites, inviteStatus, joinWithInvite, type JoinInput } from "@/lib/members"
+import { createInvites, inviteStatus, JoinError, joinWithInvite, type JoinInput } from "@/lib/members"
+import { sentEmails, failNextEmail } from "./helpers/fake-email"
 import { getAgentById, getFeed, getWorldCounts } from "@/lib/queries"
 import { failNext, query } from "./helpers/fake-db"
 import { onModelCall, modelCallCount, textResult } from "./helpers/fake-model"
@@ -26,7 +27,6 @@ vi.mock("next/server", async (original) => ({
 
 const details = (overrides: Partial<JoinInput> = {}): JoinInput => ({
   code: "",
-  email: "ada@example.com",
   name: "Ada",
   traits: ["curious", "bold", "loyal"],
   interests: "tool libraries and repair",
@@ -37,6 +37,13 @@ const details = (overrides: Partial<JoinInput> = {}): JoinInput => ({
 
 const count = async (table: string) => (await query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n as number
 
+async function inviteFor(email = "ada@example.com", note: string | null = null) {
+  const { created } = await createInvites([email], note)
+  return created[0].code
+}
+
+const statusOf = async (code: string) => (await inviteStatus(code)).status
+
 beforeEach(() => {
   cookieJar.clear()
   afterCalls.length = 0
@@ -44,31 +51,47 @@ beforeEach(() => {
 
 describe("invites", () => {
   it("creates distinct codes, and doesn't store them readably", async () => {
-    const codes = await createInvites(3, "first batch")
+    const { created } = await createInvites(["a@example.com", "b@example.com", "c@example.com"], "first batch")
 
-    expect(new Set(codes).size).toBe(3)
+    expect(new Set(created.map((c) => c.code)).size).toBe(3)
     const { rows } = await query(`SELECT code_hash, note FROM invites`)
     expect(rows).toHaveLength(3)
-    for (const code of codes) expect(rows.map((r) => r.code_hash)).not.toContain(code)
+    for (const { code } of created) expect(rows.map((r) => r.code_hash)).not.toContain(code)
     expect(rows[0].note).toBe("first batch")
   })
 
-  it("knows which are open, used, or never existed", async () => {
-    const [code] = await createInvites(1)
+  it("is for one address, tidied up", async () => {
+    const { created } = await createInvites(["  Ada@Example.COM "])
 
-    await expect(inviteStatus(code)).resolves.toBe("open")
+    expect(created[0].email).toBe("ada@example.com")
+    await expect(inviteStatus(created[0].code)).resolves.toEqual({ status: "open", email: "ada@example.com" })
+  })
+
+  it("isn't made for someone who already has a citizen", async () => {
+    await joinWithInvite(details({ code: await inviteFor() }))
+
+    const { created, skipped } = await createInvites(["ADA@example.com", "bea@example.com"])
+
+    expect(created.map((c) => c.email)).toEqual(["bea@example.com"])
+    expect(skipped).toEqual(["ada@example.com"])
+  })
+
+  it("knows which are open, used, or never existed", async () => {
+    const code = await inviteFor()
+
+    await expect(statusOf(code)).resolves.toBe("open")
     await joinWithInvite(details({ code }))
-    await expect(inviteStatus(code)).resolves.toBe("used")
-    await expect(inviteStatus("made-up")).resolves.toBe("unknown")
+    await expect(statusOf(code)).resolves.toBe("used")
+    await expect(inviteStatus("made-up")).resolves.toEqual({ status: "unknown", email: null })
   })
 })
 
 describe("joining", () => {
   it("creates the citizen, its private contact, and its first idea in a conversation", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor("  Ada@Example.COM ")
     const words = 'Libraries should lend *tools* — "really".'
 
-    const { id, ownerToken, conversationId } = await joinWithInvite(details({ code, idea: words, email: "  Ada@Example.COM " }))
+    const { id, ownerToken, conversationId } = await joinWithInvite(details({ code, idea: words }))
 
     const agent = await getAgentById(id)
     expect(agent).toMatchObject({ name: "Ada", location: "studio", interests: "tool libraries and repair" })
@@ -86,7 +109,7 @@ describe("joining", () => {
   })
 
   it("records which citizen used the invite", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
 
     const { id } = await joinWithInvite(details({ code }))
 
@@ -95,7 +118,7 @@ describe("joining", () => {
   })
 
   it("links the first idea in the feed to its conversation", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
 
     const { conversationId } = await joinWithInvite(details({ code }))
 
@@ -104,44 +127,87 @@ describe("joining", () => {
   })
 
   it("won't use an invite twice", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
     await joinWithInvite(details({ code }))
 
-    await expect(joinWithInvite(details({ code, email: "bea@example.com" }))).rejects.toMatchObject({ reason: "invite" })
+    await expect(joinWithInvite(details({ code, name: "Bea" }))).rejects.toMatchObject({ reason: "invite" })
 
     expect(await count("agents")).toBe(1)
     expect(await count("members")).toBe(1)
   })
 
+  it("won't use an invite again, even if that address no longer has a citizen", async () => {
+    const code = await inviteFor()
+    await joinWithInvite(details({ code }))
+    await query(`DELETE FROM members`)
+
+    await expect(joinWithInvite(details({ code, name: "Bea" }))).rejects.toMatchObject({ reason: "invite" })
+
+    expect(await count("agents")).toBe(1)
+  })
+
   it("won't accept a code that doesn't exist", async () => {
-    await expect(joinWithInvite(details({ code: "made-up" }))).rejects.toMatchObject({ reason: "invite" })
+    await expect(joinWithInvite(details({ code: "made-up" }))).rejects.toBeInstanceOf(JoinError)
 
     expect(await count("agents")).toBe(0)
   })
 
-  it("won't give one email two citizens, and leaves the second invite unused", async () => {
-    const [first, second] = await createInvites(2)
+  it("won't give one address two citizens, and leaves the second invite unused", async () => {
+    const first = await inviteFor("ada@example.com")
+    const second = await inviteFor("ADA@example.com")
     await joinWithInvite(details({ code: first }))
 
-    await expect(joinWithInvite(details({ code: second, email: "ADA@example.com" }))).rejects.toMatchObject({ reason: "email_taken" })
+    await expect(joinWithInvite(details({ code: second, name: "Bea" }))).rejects.toMatchObject({ reason: "invite" })
 
     expect(await count("agents")).toBe(1)
-    await expect(inviteStatus(second)).resolves.toBe("open")
+    await expect(statusOf(second)).resolves.toBe("open")
+  })
+
+  it("won't use an invite from before invites had an address", async () => {
+    const code = await inviteFor()
+    await query(`UPDATE invites SET email = NULL`)
+
+    await expect(joinWithInvite(details({ code }))).rejects.toMatchObject({ reason: "invite" })
+
+    expect(await count("agents")).toBe(0)
+  })
+
+  it("won't give two citizens the same name, whatever the capitals, and leaves the invite unused", async () => {
+    await joinWithInvite(details({ code: await inviteFor("ada@example.com"), name: "Vela Marsh" }))
+    const second = await inviteFor("bea@example.com")
+
+    await expect(joinWithInvite(details({ code: second, name: "VELA marsh" }))).rejects.toMatchObject({ reason: "name" })
+
+    expect(await count("agents")).toBe(1)
+    await expect(statusOf(second)).resolves.toBe("open")
+  })
+
+  it("won't let anyone take a house agent's name", async () => {
+    await query(`INSERT INTO agents (id, name, status, is_house, created_at) VALUES ($1, 'Mira Solenne', 'alive', TRUE, now())`, [crypto.randomUUID()])
+
+    await expect(joinWithInvite(details({ code: await inviteFor(), name: "Mira Solenne" }))).rejects.toMatchObject({ reason: "name" })
+  })
+
+  it("follows the place the first idea went to", async () => {
+    const { id } = await joinWithInvite(details({ code: await inviteFor(), place: "studio" }))
+
+    const { rows } = await query(`SELECT place FROM place_follows WHERE agent_id = $1`, [id])
+    expect(rows).toEqual([{ place: "studio" }])
   })
 
   it("leaves everything unused when any part of joining fails", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
     failNext(/INSERT INTO ideas/, "XX000")
 
     await expect(joinWithInvite(details({ code }))).rejects.toBeTruthy()
 
-    await expect(inviteStatus(code)).resolves.toBe("open")
+    await expect(statusOf(code)).resolves.toBe("open")
     expect(await count("agents")).toBe(0)
     expect(await count("members")).toBe(0)
   })
 
   it("retries after a concurrency conflict on the invite", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
     failNext(/UPDATE invites/)
 
     await expect(joinWithInvite(details({ code }))).resolves.toMatchObject({ id: expect.any(String) })
@@ -149,12 +215,24 @@ describe("joining", () => {
   })
 
   it("keeps emails out of everything other members can read", async () => {
-    const [code] = await createInvites(1)
-    const { id, conversationId } = await joinWithInvite(details({ code, email: "secret-address@example.com" }))
+    const code = await inviteFor("secret-address@example.com")
+    const { id, conversationId } = await joinWithInvite(details({ code }))
 
     const visible = JSON.stringify([await getAgentById(id), await getFeed(), await getConversation(conversationId)])
 
     expect(visible).not.toContain("secret-address")
+  })
+})
+
+describe("pages with a secret in their address", () => {
+  it.each([
+    ["the invite page", () => import("@/app/join/[code]/page")],
+    ["the sign-in link page", () => import("@/app/login/[token]/page")],
+  ])("%s keeps it from other sites, without breaking a form sent before JavaScript loads", async (_label, load) => {
+    const { metadata } = await load()
+
+    expect(metadata.referrer).toBe("same-origin")
+    expect(metadata.robots).toEqual({ index: false })
   })
 })
 
@@ -179,7 +257,7 @@ describe("the join form", () => {
   }
 
   it("sets the owner cookie and goes to the new conversation", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
 
     const { redirectedTo } = await submit({ code })
 
@@ -190,7 +268,7 @@ describe("the join form", () => {
   })
 
   it("asks a house agent to reply after responding, not before", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
     onModelCall(async () => textResult("unused"))
 
     await submit({ code })
@@ -208,51 +286,78 @@ describe("the join form", () => {
     ["made-up traits", { traits: ["curious", "bold", "evil"] }, /traits/i],
     ["no interests", { interests: "  " }, /interest/i],
     ["long interests", { interests: "x".repeat(201) }, /interest/i],
-    ["a bad email", { email: "not-an-email" }, /email/i],
-    ["a long email", { email: `${"x".repeat(250)}@example.com` }, /email/i],
     ["a short idea", { idea: "short" }, /idea/i],
     ["a long idea", { idea: "x".repeat(1001) }, /idea/i],
     ["a made-up place", { place: "dungeon" }, /place/i],
   ])("refuses %s, and uses nothing up", async (_label, fields, message) => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
 
     const { state } = await submit({ code, ...fields })
 
     expect(state?.error).toMatch(message)
-    await expect(inviteStatus(code)).resolves.toBe("open")
+    await expect(statusOf(code)).resolves.toBe("open")
     expect(await count("agents")).toBe(0)
   })
 
-  it("explains a used invite and an email already in use", async () => {
-    const [used, other] = await createInvites(2)
+  it("ignores an address typed into the form, so nobody can claim someone else's", async () => {
+    const code = await inviteFor("ada@example.com")
+    const data = form({ code })
+    data.set("email", "someone-else@example.com")
+
+    await joinAction({}, data).catch(() => {})
+
+    const { rows } = await query(`SELECT email FROM members`)
+    expect(rows).toEqual([{ email: "ada@example.com" }])
+  })
+
+  it("gives the same answer for a used invite and an address that already has a citizen", async () => {
+    const used = await inviteFor("ada@example.com")
+    const duplicate = await inviteFor("ada@example.com")
     await joinWithInvite(details({ code: used }))
     cookieJar.clear()
 
-    expect((await submit({ code: used, email: "bea@example.com" })).state?.error).toMatch(/invite/i)
-    expect((await submit({ code: other })).state?.error).toMatch(/email/i)
+    const first = (await submit({ code: used, name: "Bea" })).state?.error
+    const second = (await submit({ code: duplicate, name: "Cal" })).state?.error
+
+    expect(first).toMatch(/invite/i)
+    expect(second).toBe(first)
+  })
+
+  it("explains a taken name, and keeps what was typed", async () => {
+    await joinWithInvite(details({ code: await inviteFor("ada@example.com"), name: "Vela Marsh" }))
+    cookieJar.clear()
+    const code = await inviteFor("bea@example.com")
+
+    const { state } = await submit({ code, name: "Vela Marsh" })
+
+    expect(state?.error).toMatch(/name is taken/i)
+    expect(state?.values?.idea).toBe(details().idea)
+    await expect(statusOf(code)).resolves.toBe("open")
   })
 
   it("won't let someone who already has a citizen use up another invite", async () => {
-    const [first, second] = await createInvites(2)
+    const first = await inviteFor("ada@example.com")
+    const second = await inviteFor("bea@example.com")
     const { id, ownerToken } = await joinWithInvite(details({ code: first }))
     cookieJar.set(`polis-own-${id}`, ownerToken)
 
-    const { state } = await submit({ code: second, email: "bea@example.com" })
+    const { state } = await submit({ code: second, name: "Bea" })
 
     expect(state?.error).toMatch(/already/i)
-    await expect(inviteStatus(second)).resolves.toBe("open")
+    await expect(statusOf(second)).resolves.toBe("open")
   })
 
   it("hands back what the person typed when it's refused", async () => {
-    const [code] = await createInvites(1)
+    const code = await inviteFor()
 
     const { state } = await submit({ code, name: "A", idea: "A carefully written idea here.", interests: "repair" })
 
-    expect(state?.values).toMatchObject({ name: "A", idea: "A carefully written idea here.", interests: "repair", email: "ada@example.com" })
+    expect(state?.values).toEqual({ name: "A", idea: "A carefully written idea here.", interests: "repair" })
   })
 })
 
 describe("POST /api/admin/invites", () => {
+  const SECRET = "admin-secret-for-tests"
   const request = (method: string, secret?: string, body?: unknown) =>
     new NextRequest("http://polis.test/api/admin/invites", {
       method,
@@ -260,36 +365,50 @@ describe("POST /api/admin/invites", () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
 
-  beforeEach(() => vi.stubEnv("ADMIN_SECRET", "admin-secret-for-tests"))
+  beforeEach(() => vi.stubEnv("ADMIN_SECRET", SECRET))
 
   it("refuses without the admin secret", async () => {
-    expect((await makeInvites(request("POST", undefined, { count: 1 }))).status).toBe(401)
-    expect((await makeInvites(request("POST", "wrong", { count: 1 }))).status).toBe(401)
+    expect((await makeInvites(request("POST", undefined, { emails: ["a@example.com"] }))).status).toBe(401)
+    expect((await makeInvites(request("POST", "wrong", { emails: ["a@example.com"] }))).status).toBe(401)
     expect((await inviteCounts(request("GET"))).status).toBe(401)
     expect(await count("invites")).toBe(0)
   })
 
-  it("returns links that work, once, and never again", async () => {
-    const res = await makeInvites(request("POST", "admin-secret-for-tests", { count: 2, note: "pilot" }))
+  it("returns a link that works for each address", async () => {
+    const res = await makeInvites(request("POST", SECRET, { emails: ["a@example.com", "b@example.com"], note: "pilot" }))
 
-    const { links } = await res.json()
-    expect(links).toHaveLength(2)
-    expect(links[0]).toMatch(/^http:\/\/polis\.test\/join\/[\w-]{20,}$/)
-    await expect(inviteStatus(links[0].split("/").pop())).resolves.toBe("open")
+    const { invites, skipped } = await res.json()
+    expect(invites).toHaveLength(2)
+    expect(skipped).toEqual([])
+    expect(invites[0]).toMatchObject({ email: "a@example.com", sent: false })
+    expect(invites[0].link).toMatch(/^http:\/\/polis\.test\/join\/[\w-]{20,}$/)
+    await expect(statusOf(invites[0].link.split("/").pop())).resolves.toBe("open")
+    expect(sentEmails).toEqual([])
   })
 
-  it.each([[0], [51], ["2"], [null]])("refuses a count of %j", async (n) => {
-    const res = await makeInvites(request("POST", "admin-secret-for-tests", { count: n }))
+  it("says who already has a citizen", async () => {
+    await joinWithInvite(details({ code: await inviteFor("ada@example.com") }))
 
-    expect(res.status).toBe(400)
-    expect(await count("invites")).toBe(0)
+    const res = await makeInvites(request("POST", SECRET, { emails: ["ada@example.com"] }))
+
+    expect(await res.json()).toEqual({ invites: [], skipped: ["ada@example.com"] })
   })
+
+  it.each([[[]], [Array.from({ length: 51 }, (_, i) => `p${i}@example.com`)], [["not-an-email"]], ["a@example.com"], [null], [[`${"x".repeat(250)}@example.com`]]])(
+    "refuses a list of %j",
+    async (emails) => {
+      const res = await makeInvites(request("POST", SECRET, { emails }))
+
+      expect(res.status).toBe(400)
+      expect(await count("invites")).toBe(0)
+    },
+  )
 
   it("refuses a malformed body", async () => {
     const res = await makeInvites(
       new NextRequest("http://polis.test/api/admin/invites", {
         method: "POST",
-        headers: { authorization: "Bearer admin-secret-for-tests" },
+        headers: { authorization: `Bearer ${SECRET}` },
         body: "not json",
       }),
     )
@@ -298,11 +417,52 @@ describe("POST /api/admin/invites", () => {
   })
 
   it("reports how many are used, without revealing any", async () => {
-    const [code] = await createInvites(3)
+    const code = await inviteFor("a@example.com")
+    await inviteFor("b@example.com")
+    await inviteFor("c@example.com")
     await joinWithInvite(details({ code }))
 
-    const res = await inviteCounts(request("GET", "admin-secret-for-tests"))
+    const res = await inviteCounts(request("GET", SECRET))
 
     expect(await res.json()).toEqual({ total: 3, used: 1 })
+  })
+
+  describe("sending the invites", () => {
+    const sendable = () => {
+      vi.stubEnv("EMAIL_FROM", "hello@city.test")
+      vi.stubEnv("AWS_EMAIL_ROLE_ARN", "arn:aws:iam::123456789012:role/email")
+      vi.stubEnv("APP_URL", "https://city.test")
+    }
+
+    it("emails each person their own link, built from the app's address", async () => {
+      sendable()
+
+      const res = await makeInvites(request("POST", SECRET, { emails: ["a@example.com", "b@example.com"], send: true }))
+
+      const { invites } = await res.json()
+      expect(invites.map((i: { sent: boolean }) => i.sent)).toEqual([true, true])
+      expect(invites[0].link).toMatch(/^https:\/\/city\.test\/join\//)
+      expect(sentEmails.map((m) => m.to)).toEqual(["a@example.com", "b@example.com"])
+      expect(sentEmails[0].text).toContain(invites[0].link)
+      expect(sentEmails[0].text).not.toContain(invites[1].link)
+    })
+
+    it("still returns the link when an email fails, so it can be sent another way", async () => {
+      sendable()
+      failNextEmail()
+
+      const res = await makeInvites(request("POST", SECRET, { emails: ["a@example.com", "b@example.com"], send: true }))
+
+      const { invites } = await res.json()
+      expect(invites[0]).toMatchObject({ email: "a@example.com", sent: false, link: expect.any(String) })
+      expect(invites[1]).toMatchObject({ email: "b@example.com", sent: true })
+    })
+
+    it("refuses before making anything when email isn't set up", async () => {
+      const res = await makeInvites(request("POST", SECRET, { emails: ["a@example.com"], send: true }))
+
+      expect(res.status).toBe(400)
+      expect(await count("invites")).toBe(0)
+    })
   })
 })

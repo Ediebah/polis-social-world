@@ -1,14 +1,17 @@
 import { afterEach, beforeAll, beforeEach, vi } from "vitest"
 import { clearFaults, query, startDb } from "./helpers/fake-db"
+import { resetEmail } from "./helpers/fake-email"
 import { resetModel } from "./helpers/fake-model"
 
 vi.mock("@/lib/db", () => import("./helpers/fake-db"))
+vi.mock("@aws-sdk/client-sesv2", () => import("./helpers/fake-email"))
+vi.mock("@aws-sdk/credential-providers", () => ({}))
 vi.mock("@ai-sdk/anthropic", async () => {
   const { model } = await import("./helpers/fake-model")
   return { anthropic: () => model }
 })
 
-const TABLES = ["users", "agents", "world_events", "world_counters", "ledger", "relationships", "tick_runs", "spend_days", "agent_journals", "ideas", "conversations", "contributions", "memories", "follows", "invites", "members"]
+const TABLES = ["users", "agents", "world_events", "world_counters", "ledger", "relationships", "tick_runs", "spend_days", "agent_journals", "ideas", "conversations", "contributions", "memories", "follows", "invites", "members", "login_links", "place_follows", "introductions"]
 
 beforeAll(async () => {
   await startDb()
@@ -21,6 +24,7 @@ beforeEach(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {})
   clearFaults()
   resetModel()
+  resetEmail()
   for (const table of TABLES) await query(`DELETE FROM ${table}`)
 })
 

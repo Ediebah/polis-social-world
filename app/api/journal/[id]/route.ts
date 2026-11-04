@@ -14,8 +14,8 @@ import { memberRoute } from "@/lib/members"
 export const dynamic = "force-dynamic"
 
 const MAX_JOURNAL_TOKENS = 300
-// Citizens act at most this often anyway. Nudges also create events, so a new event
-// alone isn't enough to justify a new entry.
+// Citizens act at most this often anyway, but people's own posts also create events, so
+// a new event alone isn't enough to justify a new entry.
 const MIN_MS_BETWEEN_ENTRIES = 4 * 60 * 60_000
 
 type JournalAgent = { name: string; persona: unknown; goal: string }

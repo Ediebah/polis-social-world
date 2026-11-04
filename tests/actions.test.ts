@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { addWordsAction, nudgeAction, shareIdeaAction } from "@/app/actions"
+import { addWordsAction, shareIdeaAction } from "@/app/actions"
 import { spawnAgent } from "./helpers/citizens"
 import { query } from "./helpers/fake-db"
 
@@ -97,34 +97,6 @@ describe("adding your words", () => {
   })
 })
 
-describe("nudging", () => {
-  async function nudge(id: string, goal: string) {
-    await nudgeAction(form({ agentId: id, goal }))
-    const goalNow = await query(`SELECT goal FROM agents WHERE id = $1`, [id])
-    const events = await query(`SELECT count(*)::int AS n FROM world_events WHERE agent_id = $1 AND kind = 'post'`, [id])
-    return { goal: goalNow.rows[0].goal, events: events.rows[0].n }
-  }
-
-  it("works for the owner, and can't flood the feed", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] })
-    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"))
-    const { id, ownerToken } = await spawn()
-    cookieJar.set(`polis-own-${id}`, ownerToken)
-
-    await expect(nudge(id, "A first new goal.")).resolves.toEqual({ goal: "A first new goal.", events: 1 })
-    vi.setSystemTime(new Date("2026-11-03T10:00:20Z"))
-    await expect(nudge(id, "A second new goal.")).resolves.toEqual({ goal: "A first new goal.", events: 1 })
-    vi.setSystemTime(new Date("2026-11-03T10:00:31Z"))
-    await expect(nudge(id, "A third new goal.")).resolves.toEqual({ goal: "A third new goal.", events: 2 })
-  })
-
-  it("does nothing for anyone else", async () => {
-    const { id } = await spawn()
-
-    await expect(nudge(id, "A hijacked goal.")).resolves.toEqual({ goal: "Find a good question.", events: 0 })
-  })
-})
-
 describe("sharing an idea", () => {
   it("works for the citizen's owner", async () => {
     const { id, ownerToken } = await spawn()
@@ -175,5 +147,33 @@ describe("sharing an idea", () => {
     const state = await shareIdeaAction({}, form({ agentId: id, place: "commons", text: "short" }))
 
     expect(state).toMatchObject({ text: "short", place: "commons" })
+  })
+})
+
+describe("a suspended citizen's owner", () => {
+  async function suspended() {
+    const citizen = await spawn()
+    cookieJar.set(`polis-own-${citizen.id}`, citizen.ownerToken)
+    await query(`UPDATE agents SET status = 'suspended' WHERE id = $1`, [citizen.id])
+    return citizen
+  }
+
+  it("can't add words", async () => {
+    const { id } = await suspended()
+    const conversationId = await conversation()
+
+    const state = await addWordsAction({}, form({ agentId: id, conversationId, text: "Still here." }))
+
+    expect(state.error).toBeTruthy()
+    expect(await count("contributions")).toBe(0)
+  })
+
+  it("can't share an idea", async () => {
+    const { id } = await suspended()
+
+    const state = await shareIdeaAction({}, form({ agentId: id, place: "studio", text: "One more idea from me." }))
+
+    expect(state.error).toBeTruthy()
+    expect(await count("ideas")).toBe(0)
   })
 })

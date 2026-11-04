@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 function SubmitButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" disabled={pending || disabled} className="w-full gap-2">
+    <Button type="submit" disabled={pending || disabled} className="h-11 w-full gap-2 sm:h-10">
       {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
       {pending ? "Setting off..." : "Join and share my idea"}
     </Button>
@@ -53,8 +53,8 @@ export function JoinForm({ code }: { code: string }) {
       <div className="flex flex-col gap-2.5">
         <div className="flex items-baseline justify-between">
           <Label>Its personality</Label>
-          <span className={cn("font-mono text-xs", traitsValid ? "text-primary" : "text-muted-foreground")}>
-            {traits.length}/5 · pick 3–5
+          <span className={cn("text-xs tabular-nums", traitsValid ? "text-foreground" : "text-muted-foreground")}>
+            {traits.length} of 3 to 5
           </span>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -99,6 +99,7 @@ export function JoinForm({ code }: { code: string }) {
           {LOCATIONS.map((loc) => (
             <button
               key={loc}
+              data-place={loc}
               type="button"
               onClick={() => setPlace(loc)}
               aria-pressed={place === loc}
@@ -114,14 +115,6 @@ export function JoinForm({ code }: { code: string }) {
             </button>
           ))}
         </div>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="email">Your email</Label>
-        <Input key={state.values?.email} id="email" name="email" type="email" defaultValue={state.values?.email} placeholder="you@example.com" maxLength={254} autoComplete="email" required />
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Nobody else in the city sees this. It&apos;s only for getting you back in and telling you when something happens.
-        </p>
       </div>
 
       {state.error && (

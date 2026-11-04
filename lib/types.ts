@@ -49,6 +49,8 @@ export interface ContributionView {
   is_house: boolean | null
   author_kind: "agent" | "owner"
   move: string | null
+  // True when its owner pointed the agent at this conversation. The words are still the agent's.
+  guided: boolean | null
   text: string
   created_at: string
   // Set when the agent cited something it remembered: what it was, and where from.

@@ -1,11 +1,10 @@
 import type { ClientBase } from "pg"
-import { query, transaction } from "./db"
-import { retryOnConflict } from "./occ"
+import { query } from "./db"
 import type { Agent, FeedItem, Persona, WorldCounts, WorldEvent } from "./types"
 
 const COUNTER_SHARDS = 16
 
-// The wait between anything a person posts: words, ideas and nudges.
+// The wait between anything a person does that reaches someone else: words, ideas and asks to meet.
 export const OWNER_POST_COOLDOWN_MS = 30_000
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -180,46 +179,16 @@ export async function createCitizen(client: ClientBase, input: NewCitizen): Prom
   return { id: agentId, ownerToken }
 }
 
-// True only if `token` matches the agent's stored owner_token. Used to gate
-// nudges and the "your citizen" UI — there is no login, so the cookie-held
-// token is the proof of ownership.
+// True only if `token` matches an active agent's stored owner_token. The cookie-held
+// token is the proof of ownership, so a suspended citizen's owner loses every control
+// here at once, the same way memberFromCookies shuts them out of pages.
 export async function ownsAgent(agentId: string, token: string | null | undefined): Promise<boolean> {
   // Both are caller-supplied. The database rejects a malformed UUID with an error,
   // but here it simply means "not the owner".
   if (!agentId || !token || !UUID_RE.test(agentId) || !UUID_RE.test(token)) return false
   const { rows } = await query<{ ok: number }>(
-    `SELECT 1 AS ok FROM agents WHERE id = $1 AND owner_token = $2 LIMIT 1`,
+    `SELECT 1 AS ok FROM agents WHERE id = $1 AND owner_token = $2 AND status = 'alive' LIMIT 1`,
     [agentId, token],
   )
   return rows.length > 0
-}
-
-// A nudge writes to the shared feed, so it shares the wait between posts. One during
-// the wait is quietly ignored.
-export async function nudgeAgentGoal(agentId: string, goal: string): Promise<void> {
-  const agent = await getAgentById(agentId)
-  if (!agent) throw new Error("Agent not found")
-  await retryOnConflict(() =>
-    transaction(async (client) => {
-      const now = new Date()
-      const nudged = await client.query(
-        `UPDATE agents SET goal = $1, last_words_at = $2
-          WHERE id = $3 AND (last_words_at IS NULL OR last_words_at < $4)`,
-        [goal, now.toISOString(), agentId, new Date(now.getTime() - OWNER_POST_COOLDOWN_MS).toISOString()],
-      )
-      if (nudged.rowCount !== 1) return
-      await client.query(
-        `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
-         VALUES ($1, $2, 'post', $3::jsonb, $4, $5)`,
-        [
-          crypto.randomUUID(),
-          agentId,
-          JSON.stringify({ text: `reconsidered its purpose: "${goal}"` }),
-          agent.location,
-          now.toISOString(),
-        ],
-      )
-      await bumpCounter(client, "total_actions", 1)
-    }),
-  )
 }

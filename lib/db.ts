@@ -49,7 +49,7 @@ export async function withConnection<T>(fn: (client: ClientBase) => Promise<T>):
 }
 
 // Runs fn inside a real BEGIN/COMMIT transaction, rolling back on any error.
-// Use this for multi-statement writes that must be atomic (spawn, seed, nudge).
+// Use this for multi-statement writes that must be atomic (joining, seeding).
 // Note: commitAction in simulation.ts manages its own BEGIN/COMMIT because it
 // needs to ROLLBACK-and-return without throwing on a lost OCC claim.
 export async function transaction<T>(fn: (client: ClientBase) => Promise<T>): Promise<T> {
