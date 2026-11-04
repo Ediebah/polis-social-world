@@ -355,10 +355,10 @@ describe("GET /api/journal/[id]", () => {
   }
 
   it("doesn't spend again on later views when the citizen has done nothing new", async () => {
-    const { id } = await newAgent()
-    onModelCall(async () => textResult("An entry worth keeping."))
     vi.useFakeTimers({ toFake: ["Date"] })
     vi.setSystemTime(new Date("2026-11-02T10:00:00Z"))
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("An entry worth keeping."))
 
     await read(id)
     vi.setSystemTime(new Date("2026-11-02T16:00:00Z"))
@@ -370,15 +370,52 @@ describe("GET /api/journal/[id]", () => {
   })
 
   it("writes a new entry once the citizen has done something new", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"))
     const { id } = await newAgent()
     onModelCall(async () => textResult(`Entry ${modelCallCount()}.`))
 
     await read(id)
-    await addEvent(id, new Date(Date.now() + 1000).toISOString())
+    vi.setSystemTime(new Date("2026-11-02T14:01:00Z"))
+    await addEvent(id)
     const body = await (await read(id)).json()
 
     expect(body.journal).toBe("Entry 2.")
     expect(modelCallCount()).toBe(2)
+  })
+
+  it("writes at most one entry per citizen in 4 hours, however many events it has", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"))
+    const { id } = await newAgent()
+    onModelCall(async () => textResult(`Entry ${modelCallCount()}.`))
+
+    await read(id)
+    for (const time of ["10:01", "10:02", "11:30", "13:59"]) {
+      vi.setSystemTime(new Date(`2026-11-02T${time}:00Z`))
+      await addEvent(id)
+      expect((await (await read(id)).json()).journal).toBe("Entry 1.")
+    }
+
+    expect(modelCallCount()).toBe(1)
+  })
+
+  it("recovers from a writer that died before saving", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"))
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("Written at last."))
+    await query(`INSERT INTO agent_journals (agent_id, claimed_at, updated_at) VALUES ($1, $2, $2)`, [
+      id,
+      "2026-11-02T09:59:00Z",
+    ])
+
+    const stuck = await (await read(id)).json()
+    vi.setSystemTime(new Date("2026-11-02T14:01:00Z"))
+    const recovered = await (await read(id)).json()
+
+    expect(stuck.journal).toBe("Arrived in the plaza.")
+    expect(recovered.journal).toBe("Written at last.")
   })
 
   it("makes one call when many people open a citizen at once", async () => {
@@ -405,20 +442,18 @@ describe("GET /api/journal/[id]", () => {
     expect(next.journal).toBe("Back to normal.")
   })
 
-  it("keeps the newer entry when a slower writer finishes after it", async () => {
+  it("doesn't start a second call when the citizen acts during the first", async () => {
     const { id } = await newAgent()
     onModelCall(async () => {
-      if (modelCallCount() > 1) return textResult("Newer entry.")
       await addEvent(id, new Date(Date.now() + 1000).toISOString())
       await read(id)
-      return textResult("Older entry.")
+      return textResult("The only entry.")
     })
 
     await read(id)
-    const body = await (await read(id)).json()
 
-    expect(body.journal).toBe("Newer entry.")
-    expect(modelCallCount()).toBe(2)
+    expect(modelCallCount()).toBe(1)
+    expect((await (await read(id)).json()).journal).toBe("The only entry.")
   })
 
   it("stops at the visitors' share of the budget, leaving the rest for world updates", async () => {

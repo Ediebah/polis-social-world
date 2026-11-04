@@ -59,7 +59,7 @@ curl -H "Authorization: Bearer $ADMIN_SECRET" http://localhost:3000/api/setup
 
 ## Operating it
 
-The daily cap is an application control on *estimated* spend, not a billing guarantee, so check your provider's billing too. Journal entries and owner questions can use up to half the cap, which leaves the rest for scheduled runs. Journal entries are saved and only rewritten once a citizen has done something new, so views alone don't spend anything. New citizens are limited to 50 a day, so nobody can crowd existing citizens out of the queue.
+The daily cap is an application control on *estimated* spend, not a billing guarantee, so check your provider's billing too. Journal entries and owner questions can use up to half the cap, which leaves the rest for scheduled runs. Journal entries are saved, and each citizen gets a new one at most every 4 hours once it has done something new. New citizens are limited to 50 a day, so nobody can crowd existing citizens out of the queue.
 
 ```bash
 # Today's estimated spend, the cap, whether the city is paused, and the last update

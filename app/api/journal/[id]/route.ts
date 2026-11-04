@@ -1,8 +1,8 @@
 // app/api/journal/[id]/route.ts
 // A short, first-person "what I did" recap for a citizen, written by Claude from
-// its recent events. Entries are saved and only rewritten once the citizen has done
-// something new, so what this spends follows what citizens do, not how often anyone
-// looks.
+// its recent events. Entries are saved, and a citizen gets a new one at most every 4
+// hours once it has done something new, so neither views nor a stream of events can
+// run up spend.
 import { NextResponse } from "next/server"
 import { query } from "@/lib/db"
 import { eventSummary, stripMarkdown } from "@/lib/format"
@@ -12,6 +12,9 @@ import { generateWithinBudget, SpendBlockedError } from "@/lib/spend"
 export const dynamic = "force-dynamic"
 
 const MAX_JOURNAL_TOKENS = 300
+// Citizens act at most this often anyway. Nudges also create events, so a new event
+// alone isn't enough to justify a new entry.
+const MIN_MS_BETWEEN_ENTRIES = 4 * 60 * 60_000
 
 type JournalAgent = { name: string; persona: unknown; goal: string }
 type JournalEvent = { id: string; kind: string; payload: unknown; location: string; created_at: string }
@@ -42,10 +45,11 @@ function buildDigest(rows: { kind: string; payload: unknown }[]): string {
   return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
 }
 
-// Only the visitor who claims a citizen's newest event writes its entry, so many
-// people opening a citizen at once still make one model call.
-function claimEntry(agentId: string, eventId: string): Promise<boolean> {
+// Only one visitor per window gets to write, so many people opening a citizen at once
+// still make one model call. A writer that dies keeps the claim until the window ends.
+function claimEntry(agentId: string): Promise<boolean> {
   const now = new Date().toISOString()
+  const cutoff = new Date(Date.now() - MIN_MS_BETWEEN_ENTRIES).toISOString()
   return retryOnConflict(async () => {
     await query(
       `INSERT INTO agent_journals (agent_id, updated_at) VALUES ($1, $2)
@@ -53,30 +57,29 @@ function claimEntry(agentId: string, eventId: string): Promise<boolean> {
       [agentId, now],
     )
     const r = await query(
-      `UPDATE agent_journals SET claimed_event_id = $2, updated_at = $3
-        WHERE agent_id = $1 AND (claimed_event_id IS NULL OR claimed_event_id <> $2)`,
-      [agentId, eventId, now],
+      `UPDATE agent_journals SET claimed_at = $2, updated_at = $2
+        WHERE agent_id = $1 AND (claimed_at IS NULL OR claimed_at < $3)`,
+      [agentId, now, cutoff],
     )
     return (r.rowCount ?? 0) === 1
   })
 }
 
-function releaseClaim(agentId: string, eventId: string) {
-  return query(
-    `UPDATE agent_journals SET claimed_event_id = NULL, updated_at = $3
-      WHERE agent_id = $1 AND claimed_event_id = $2`,
-    [agentId, eventId, new Date().toISOString()],
-  )
+function releaseClaim(agentId: string) {
+  return query(`UPDATE agent_journals SET claimed_at = NULL, updated_at = $2 WHERE agent_id = $1`, [
+    agentId,
+    new Date().toISOString(),
+  ])
 }
 
-// Matching the claim means a slower writer can't replace an entry for a newer event.
 function saveEntry(agentId: string, eventId: string, journal: string) {
   return retryOnConflict(() =>
-    query(
-      `UPDATE agent_journals SET journal = $3, event_id = $2, updated_at = $4
-        WHERE agent_id = $1 AND claimed_event_id = $2`,
-      [agentId, eventId, journal, new Date().toISOString()],
-    ),
+    query(`UPDATE agent_journals SET journal = $3, event_id = $2, updated_at = $4 WHERE agent_id = $1`, [
+      agentId,
+      eventId,
+      journal,
+      new Date().toISOString(),
+    ]),
   )
 }
 
@@ -114,22 +117,23 @@ async function writeEntry(agent: JournalAgent, events: JournalEvent[]): Promise<
 }
 
 // The saved entry if it's current, a new one if this visitor gets to write it, and
-// otherwise nothing. Never calls the model without holding the claim.
+// otherwise whatever was last saved. Never calls the model without holding the claim.
 async function currentEntry(agentId: string, agent: JournalAgent, events: JournalEvent[]): Promise<string> {
   const newestId = events[0].id
   const saved = await query<{ journal: string | null; event_id: string | null }>(
     `SELECT journal, event_id FROM agent_journals WHERE agent_id = $1`,
     [agentId],
   )
-  if (saved.rows[0]?.event_id === newestId && saved.rows[0].journal) return saved.rows[0].journal
-  if (!(await claimEntry(agentId, newestId))) return ""
+  const lastEntry = saved.rows[0]?.journal ?? ""
+  if (lastEntry && saved.rows[0].event_id === newestId) return lastEntry
+  if (!(await claimEntry(agentId))) return lastEntry
 
   let entry = ""
   try {
     entry = await writeEntry(agent, events)
   } finally {
     // Failed or came back empty, so the next visitor can try again.
-    if (!entry) await releaseClaim(agentId, newestId).catch(() => {})
+    if (!entry) await releaseClaim(agentId).catch(() => {})
   }
   if (entry) await saveEntry(agentId, newestId, entry)
   return entry

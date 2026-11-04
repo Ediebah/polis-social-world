@@ -104,12 +104,12 @@ CREATE TABLE IF NOT EXISTS spend_days (
 COMMIT;
 
 -- One saved journal entry per citizen. event_id is the newest event the entry
--- covers; claimed_event_id is the newest event someone has taken on writing up.
+-- covers; claimed_at is when someone last took on writing one.
 CREATE TABLE IF NOT EXISTS agent_journals (
   agent_id UUID PRIMARY KEY,
   journal TEXT,
   event_id UUID,
-  claimed_event_id UUID,
+  claimed_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ
 );
 COMMIT;
