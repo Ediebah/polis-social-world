@@ -28,6 +28,51 @@ export function plainName(name: string): string {
   return name.replace(NOT_NAME_CHARACTER, " ").replace(/\s+/g, " ").trim() || "someone"
 }
 
+// Cyrillic and Greek letters that pass for Latin ones. Written as escapes because the
+// letters themselves would be impossible to tell apart here.
+const LOOKALIKES = new Map(
+  Object.entries({
+    a: "\u0410\u0430\u0391\u03B1",
+    b: "\u0412\u0392\u044C",
+    c: "\u0421\u0441\u03F9\u03F2",
+    d: "\u0501",
+    e: "\u0415\u0435\u0395\u03B5",
+    h: "\u041D\u04BA\u04BB\u0397",
+    i: "\u0406\u0456\u0399\u03B9\u04C0\u04CF",
+    j: "\u0408\u0458",
+    k: "\u041A\u043A\u039A\u03BA",
+    m: "\u041C\u039C",
+    n: "\u039D\u03B7",
+    o: "\u041E\u043E\u039F\u03BF",
+    p: "\u0420\u0440\u03A1\u03C1",
+    q: "\u051B",
+    s: "\u0405\u0455",
+    t: "\u0422\u03A4",
+    u: "\u03C5",
+    v: "\u03BD",
+    w: "\u051C\u051D",
+    x: "\u0425\u0445\u03A7\u03C7",
+    y: "\u0423\u0443\u03A5\u03B3",
+    z: "\u0396",
+  }).flatMap(([latin, others]) => [...others].map((other): [string, string] => [other, latin])),
+)
+
+// What a name looks like on screen, so two names with the same key can pass for each other.
+// It's stricter than it needs to be: "Ali" and "Ail" collide, which only means picking
+// another name. Only Latin-style accents go, because vowel signs in other scripts are what
+// make names different.
+export function nameKey(name: string): string {
+  const plain = name.normalize("NFKD").replace(/[\u0300-\u036F]/g, "")
+  return [...plain]
+    .map((character) => LOOKALIKES.get(character) ?? character)
+    .join("")
+    .toLowerCase()
+    .replace(/[l1]/g, "i")
+    .replace(/0/g, "o")
+    .replace(/rn/g, "m")
+    .replace(/[^\p{L}\p{M}\p{N}]/gu, "")
+}
+
 const PERSON = String.raw`(?:owners?|humans?|creators?|person)`
 const POSSESSOR = String.raw`(?:my|your|their|his|her|its|\w+['\u2019]s)`
 const CLAIM =

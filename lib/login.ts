@@ -68,9 +68,9 @@ export async function sendLoginLink(rawEmail: string): Promise<void> {
 }
 
 // Doesn't use the link up, because mail scanners open links before people do.
-export async function peekLoginLink(token: string): Promise<{ name: string } | null> {
-  const { rows } = await query<{ name: string }>(
-    `SELECT a.name FROM login_links l JOIN agents a ON a.id = l.agent_id
+export async function peekLoginLink(token: string): Promise<{ id: string; name: string } | null> {
+  const { rows } = await query<{ id: string; name: string }>(
+    `SELECT a.id, a.name FROM login_links l JOIN agents a ON a.id = l.agent_id
       WHERE l.token_hash = $1 AND l.used_at IS NULL AND l.expires_at > $2 AND a.status = 'alive'`,
     [hashToken(token), new Date().toISOString()],
   )

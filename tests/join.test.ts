@@ -182,6 +182,50 @@ describe("joining", () => {
     await expect(statusOf(second)).resolves.toBe("open")
   })
 
+  describe("names that only look different", () => {
+    beforeEach(async () => {
+      await joinWithInvite(details({ code: await inviteFor("ada@example.com"), name: "Mira Solenne" }))
+    })
+
+    it.each([
+      ["a Cyrillic small letter", "M\u0456ra Solenne"],
+      ["a Cyrillic capital", "\u041Cira Solenne"],
+      ["a Greek letter", "Mira S\u03BFlenne"],
+      ["wide characters", "\uFF2D\uFF49\uFF52\uFF41 Solenne"],
+      ["an accent", "Mir\u00E1 Solenne"],
+      ["a separate combining accent", "Mira\u0301 Solenne"],
+      ["two spaces", "Mira  Solenne"],
+      ["a hyphen for the space", "Mira-Solenne"],
+      ["a capital I for a small l", "Mira SoIenne"],
+      ["a one for a small l", "Mira So1enne"],
+      ["a zero for an o", "Mira S0lenne"],
+      ["rn for an m", "rnira Solenne"],
+    ])("refuses %s", async (_how, name) => {
+      const second = await inviteFor("bea@example.com")
+
+      await expect(joinWithInvite(details({ code: second, name }))).rejects.toMatchObject({ reason: "name" })
+
+      await expect(statusOf(second)).resolves.toBe("open")
+    })
+
+    it.each([
+      ["a different vowel", "Mara Solenne"],
+      ["a different surname", "Mira Soleil"],
+      ["a name in Cyrillic", "\u041C\u0430\u0440\u0438\u044F"],
+      ["a name in Japanese", "\u7530\u4E2D\u3055\u3093"],
+    ])("still allows %s", async (_how, name) => {
+      await expect(joinWithInvite(details({ code: await inviteFor("bea@example.com"), name }))).resolves.toBeTruthy()
+    })
+
+    it("keeps apart Hindi names that differ only by a vowel sign", async () => {
+      await joinWithInvite(details({ code: await inviteFor("bea@example.com"), name: "\u0915\u0930\u0923" }))
+
+      await expect(
+        joinWithInvite(details({ code: await inviteFor("cal@example.com"), name: "\u0915\u093F\u0930\u0923" })),
+      ).resolves.toBeTruthy()
+    })
+  })
+
   it("won't let anyone take a house agent's name", async () => {
     await query(`INSERT INTO agents (id, name, status, is_house, created_at) VALUES ($1, 'Mira Solenne', 'alive', TRUE, now())`, [crypto.randomUUID()])
 

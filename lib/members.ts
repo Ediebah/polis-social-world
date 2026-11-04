@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { NextResponse, type NextRequest } from "next/server"
+import { nameKey } from "./attribution"
 import { followConversation, followPlace, insertIdea } from "./conversations"
 import { query, transaction } from "./db"
 import { retryOnConflict } from "./occ"
@@ -139,9 +140,11 @@ export function joinWithInvite(input: JoinInput): Promise<JoinResult> {
         hashCode(input.code),
       ])
 
-      // A name is how everyone tells citizens apart, house agents included.
-      const taken = await client.query(`SELECT 1 FROM agents WHERE lower(name) = lower($1) LIMIT 1`, [input.name])
-      if (taken.rows.length > 0) throw new JoinError("name")
+      // A name is how everyone tells citizens apart, house agents included. Reading every
+      // name is fine for a city this size, and people only join by invite.
+      const key = nameKey(input.name)
+      const others = await client.query<{ name: string }>(`SELECT name FROM agents`)
+      if (others.rows.some((other) => nameKey(other.name) === key)) throw new JoinError("name")
 
       const { id, ownerToken } = await createCitizen(client, {
         handle: input.name.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 30) || "citizen",

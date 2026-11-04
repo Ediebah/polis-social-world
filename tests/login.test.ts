@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
 import { redeemLoginLinkAction, requestLoginLinkAction, signOutAction } from "@/app/actions"
+import ConfirmLoginPage from "@/app/login/[token]/page"
 import LoginPage from "@/app/login/page"
 import { LOGIN_LINK_MINUTES, MAX_LINKS_PER_HOUR, peekLoginLink, redeemLoginLink, sendLoginLink } from "@/lib/login"
 import { createInvites, joinWithInvite } from "@/lib/members"
@@ -187,8 +188,8 @@ describe("using a link", () => {
     await member()
     const token = await linkFor()
 
-    await expect(peekLoginLink(token)).resolves.toEqual({ name: "Ada" })
-    await expect(peekLoginLink(token)).resolves.toEqual({ name: "Ada" })
+    await expect(peekLoginLink(token)).resolves.toEqual({ id: expect.any(String), name: "Ada" })
+    await expect(peekLoginLink(token)).resolves.toEqual({ id: expect.any(String), name: "Ada" })
 
     await expect(redeemLoginLink(token)).resolves.toMatchObject({ name: "Ada" })
   })
@@ -309,6 +310,58 @@ describe("confirming on the page the link opens", () => {
 
     expect(to).toBe("/login?expired=1")
     expect(cookieJar.size).toBe(0)
+  })
+})
+
+describe("a link that isn't for whoever opens it", () => {
+  const render = async (token: string) =>
+    renderToStaticMarkup(await ConfirmLoginPage({ params: Promise.resolve({ token }) }))
+
+  it("warns someone already signed in that it would replace their citizen, and lets them stay", async () => {
+    await member()
+    const bea = await member("bea@example.com", "Bea")
+    cookieJar.set(`polis-own-${bea.id}`, bea.ownerToken)
+    await sendLoginLink(EMAIL)
+
+    const html = await render(tokenFromEmail())
+
+    expect(html).toMatch(/signed in as Bea/)
+    expect(html).toContain("Switch to Ada")
+    expect(html).toMatch(/<a[^>]*href="\/"[^>]*>Stay as Bea/)
+    expect(html).not.toContain(">Sign in<")
+  })
+
+  it("has no warning when the link is for the citizen already signed in", async () => {
+    const ada = await member()
+    cookieJar.set(`polis-own-${ada.id}`, ada.ownerToken)
+    await sendLoginLink(EMAIL)
+
+    const html = await render(tokenFromEmail())
+
+    expect(html).not.toMatch(/signed in as/)
+    expect(html).toContain(">Sign in<")
+  })
+
+  it("tells someone signed out to leave if the agent isn't theirs", async () => {
+    await member()
+    await sendLoginLink(EMAIL)
+
+    const html = await render(tokenFromEmail())
+
+    expect(html).toMatch(/If Ada isn.*t your agent, close this page/)
+    expect(html).toContain(">Sign in<")
+  })
+
+  it("only opening the page leaves the person signed in as themselves", async () => {
+    await member()
+    const bea = await member("bea@example.com", "Bea")
+    cookieJar.set(`polis-own-${bea.id}`, bea.ownerToken)
+    await sendLoginLink(EMAIL)
+
+    await render(tokenFromEmail())
+
+    expect([...cookieJar.keys()]).toEqual([`polis-own-${bea.id}`])
+    await expect(peekLoginLink(tokenFromEmail())).resolves.toMatchObject({ name: "Ada" })
   })
 })
 
