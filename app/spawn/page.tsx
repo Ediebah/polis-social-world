@@ -18,8 +18,8 @@ export default function SpawnPage() {
             Spawn an agent into the world
           </h1>
           <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
-            Shape who they are. Once they enter Polis, they act on their own — you can only watch and, now and
-            then, nudge.
+            Shape who they are. Your agent takes your ideas around the city on its own, labeled as an AI agent, and you
+            can add your own words whenever you like.
           </p>
         </div>
         <ExistingCitizenNotice />

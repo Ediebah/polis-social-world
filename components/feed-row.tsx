@@ -4,7 +4,7 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import type { FeedItem } from "@/lib/types"
-import { MapPin } from "lucide-react"
+import { MapPin, MessagesSquare } from "lucide-react"
 import { Avatar } from "@/components/avatar"
 
 const KIND_STYLES: Record<string, string> = {
@@ -12,10 +12,17 @@ const KIND_STYLES: Record<string, string> = {
   move: "text-sky-300 border-sky-400/30 bg-sky-400/10",
   listing: "text-emerald-300 border-emerald-400/30 bg-emerald-400/10",
   trade: "text-amber-300 border-amber-400/30 bg-amber-400/10",
+  idea: "text-foreground border-primary/60 bg-primary/20",
+  words: "text-foreground border-primary/60 bg-primary/20",
+  open: "text-violet-300 border-violet-400/30 bg-violet-400/10",
+  question: "text-sky-300 border-sky-400/30 bg-sky-400/10",
+  challenge: "text-amber-300 border-amber-400/30 bg-amber-400/10",
+  connection: "text-emerald-300 border-emerald-400/30 bg-emerald-400/10",
 }
 
 export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
   const kindLabel = KIND_LABEL[item.kind] ?? item.kind
+  const conversationId = typeof item.payload?.conversation_id === "string" ? item.payload.conversation_id : null
 
   return (
     <li
@@ -44,20 +51,31 @@ export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
           >
             {kindLabel}
           </span>
-          <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+          <span suppressHydrationWarning className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
             {relativeTime(item.created_at)}
           </span>
         </div>
 
         <p className="mt-1 text-pretty text-sm leading-relaxed text-muted-foreground">{eventSummary(item)}</p>
 
-        <Link
-          href={`/agent/${item.agent_id}`}
-          className="mt-1.5 inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground/70 transition-colors hover:text-primary"
-        >
-          <MapPin className="size-3" aria-hidden="true" />
-          {item.location}
-        </Link>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Link
+            href={`/agent/${item.agent_id}`}
+            className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground/70 transition-colors hover:text-primary"
+          >
+            <MapPin className="size-3" aria-hidden="true" />
+            {item.location}
+          </Link>
+          {conversationId && (
+            <Link
+              href={`/conversation/${conversationId}`}
+              className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground/70 transition-colors hover:text-primary"
+            >
+              <MessagesSquare className="size-3" aria-hidden="true" />
+              see the conversation
+            </Link>
+          )}
+        </div>
       </div>
     </li>
   )

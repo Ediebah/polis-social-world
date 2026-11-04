@@ -4,7 +4,7 @@ import { getSpendStatus, setPaused } from "@/lib/spend"
 import { failNext, query } from "./helpers/fake-db"
 import { model, modelCallCount, onModelCall, textResult } from "./helpers/fake-model"
 
-const ACTION = JSON.stringify({ type: "post", text: "a thought", to: null, item: null, price: null, with_agent: null })
+const ACTION = JSON.stringify({ type: "move", text: "a thought", to: "studio", idea_ref: null, conversation_ref: null, kind: null, takeaway: null, memory_ref: null })
 
 function at(iso: string) {
   vi.setSystemTime(new Date(iso))

@@ -6,31 +6,18 @@ import { NudgeBox } from "@/components/nudge-box"
 import { Avatar } from "@/components/avatar"
 import { getAgentById, getAgentEvents, ownsAgent } from "@/lib/queries"
 import { query } from "@/lib/db"
-import { cn } from "@/lib/utils"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target, Users } from "lucide-react"
 import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 import { AgentJournal } from "@/components/agent-journal"
 import { AgentVoiceAsk } from "@/components/agent-voice-ask"
+import { ShareIdeaForm } from "@/components/share-idea-form"
+import { toPlace } from "@/lib/places"
 import { voiceEnabled } from "@/lib/aws"
 
 export const dynamic = "force-dynamic"
 
 type Connection = { other_id: string; other_name: string; sentiment: number }
-
-function bondLabel(s: number): string {
-  if (s >= 40) return "ally"
-  if (s >= 20) return "friendly"
-  if (s > 0) return "acquainted"
-  return "wary"
-}
-
-function bondStyle(s: number): string {
-  if (s >= 40) return "text-emerald-300 border-emerald-400/30 bg-emerald-400/10"
-  if (s >= 20) return "text-sky-300 border-sky-400/30 bg-sky-400/10"
-  if (s > 0) return "text-muted-foreground border-border bg-secondary"
-  return "text-amber-300 border-amber-400/30 bg-amber-400/10"
-}
 
 async function getConnections(id: string): Promise<Connection[]> {
   try {
@@ -104,7 +91,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
           <div className="flex min-w-0 flex-col gap-3">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">
-                {isOwner ? "your citizen" : "a citizen"}
+                {isOwner ? "your citizen" : agent.is_house ? "house agent" : "a citizen"}
               </span>
               <span
                 className={
@@ -117,6 +104,9 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
               </span>
             </div>
             <h1 className="text-balance text-3xl font-semibold text-foreground">{agent.name}</h1>
+            {agent.is_house && (
+              <p className="text-sm text-muted-foreground">A character run by the city, with no human owner.</p>
+            )}
             <div className="flex flex-wrap gap-2">
               {agent.persona.traits.map((t) => (
                 <span
@@ -149,6 +139,16 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
         <AgentJournal agentId={agent.id} />
 
         {isOwner && <AgentVoiceAsk agentId={agent.id} agentName={agent.name} voiceEnabled={voiceEnabled()} />}
+
+        {isOwner && (
+          <section className="mt-8" aria-label="Share an idea">
+            <h2 className="mb-1 text-sm font-medium text-foreground">Share an idea</h2>
+            <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+              It appears exactly as you write it, marked as yours. Your agent takes it from there.
+            </p>
+            <ShareIdeaForm agentId={agent.id} defaultPlace={toPlace(agent.location)} />
+          </section>
+        )}
 
         <section className="mt-8 grid gap-6 lg:grid-cols-5">
           <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>
@@ -186,13 +186,8 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
                   >
                     <Avatar seed={c.other_id} name={c.other_name} size={32} className="shrink-0 rounded-lg" />
                     <span className="min-w-0 flex-1 truncate text-sm text-foreground">{c.other_name}</span>
-                    <span
-                      className={cn(
-                        "shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-                        bondStyle(c.sentiment),
-                      )}
-                    >
-                      {bondLabel(c.sentiment)}
+                    <span className="shrink-0 rounded-full border border-border bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      agents have interacted
                     </span>
                   </Link>
                 </li>

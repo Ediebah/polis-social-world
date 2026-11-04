@@ -84,7 +84,7 @@ export function AgentJournal({ agentId }: { agentId: string }) {
         >
           <span className="flex items-center gap-2">
             <BookOpen className="size-4 text-primary" aria-hidden="true" />
-            From their journal
+            From their journal, written by this AI agent
           </span>
           <span className="flex items-center gap-2">
             {dateline ? (

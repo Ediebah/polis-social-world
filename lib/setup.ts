@@ -1,6 +1,7 @@
 import { query, transaction } from "./db"
 import type { ClientBase } from "pg"
-import type { Persona } from "./types"
+import { PLACE_INFO, type Place } from "./places"
+import { LOCATIONS, type Persona } from "./types"
 
 const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -15,7 +16,7 @@ const DDL: string[] = [
     name VARCHAR(60),
     persona JSONB,
     goal TEXT,
-    location VARCHAR(60) DEFAULT 'plaza',
+    location VARCHAR(60) DEFAULT 'commons',
     balance BIGINT DEFAULT 1000,
     reputation INT DEFAULT 0,
     next_tick_seq BIGINT DEFAULT 0,
@@ -28,6 +29,9 @@ const DDL: string[] = [
   // DSQL only allows a name and type on ADD COLUMN, one column per statement.
   `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`,
   `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_ask_at TIMESTAMPTZ`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_words_at TIMESTAMPTZ`,
+  // House agents are labeled, city-run characters with no human owner.
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_house BOOLEAN`,
   `CREATE TABLE IF NOT EXISTS world_events (
     id UUID PRIMARY KEY,
     agent_id UUID,
@@ -36,6 +40,8 @@ const DDL: string[] = [
     location VARCHAR(60),
     created_at TIMESTAMPTZ
   )`,
+  // The idea or contribution an event is about, so its copy of the text can be found.
+  `ALTER TABLE world_events ADD COLUMN IF NOT EXISTS ref_id UUID`,
   `CREATE TABLE IF NOT EXISTS world_counters (
     counter_name VARCHAR(40),
     shard INT,
@@ -89,10 +95,66 @@ const DDL: string[] = [
     claimed_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ
   )`,
+  // A person's idea, in their exact words. Conversations start from these.
+  `CREATE TABLE IF NOT EXISTS ideas (
+    id UUID PRIMARY KEY,
+    agent_id UUID,
+    place VARCHAR(20),
+    text TEXT,
+    created_at TIMESTAMPTZ
+  )`,
+  // idea_id is NULL when a conversation started from one of the place's questions.
+  // agent_turns is what the length limit counts; people's own words don't use it up.
+  `CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY,
+    idea_id UUID,
+    place VARCHAR(20),
+    question TEXT,
+    opened_by UUID,
+    status VARCHAR(10),
+    agent_turns INT,
+    last_agent_id UUID,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+  )`,
+  // author_kind says whose words these are: 'owner' text is quoted exactly as written,
+  // and 'agent' text is always labeled as coming from the agent.
+  `CREATE TABLE IF NOT EXISTS contributions (
+    id UUID PRIMARY KEY,
+    conversation_id UUID,
+    agent_id UUID,
+    author_kind VARCHAR(10),
+    move VARCHAR(12),
+    text TEXT,
+    memory_id UUID,
+    created_at TIMESTAMPTZ
+  )`,
+  // A takeaway an agent kept from a conversation, in the agent's own words.
+  `CREATE TABLE IF NOT EXISTS memories (
+    id UUID PRIMARY KEY,
+    agent_id UUID,
+    conversation_id UUID,
+    text TEXT,
+    created_at TIMESTAMPTZ
+  )`,
+  `CREATE TABLE IF NOT EXISTS follows (
+    agent_id UUID,
+    conversation_id UUID,
+    created_at TIMESTAMPTZ,
+    PRIMARY KEY (agent_id, conversation_id)
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_place ON ideas (place, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_agent ON ideas (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_conversations_place ON conversations (place, status)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_conversations_idea ON conversations (idea_id)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_contributions_conversation ON contributions (conversation_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_contributions_agent ON contributions (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_memories_agent ON memories (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_ref ON world_events (ref_id)`,
 ]
 
 export async function ensureSchema() {
@@ -130,114 +192,77 @@ export async function releaseSeed(): Promise<void> {
 
 interface SeedAgent {
   name: string
-  handle: string
-  location: string
+  location: Place
   persona: Persona
   goal: string
-  balance: number
-  reputation: number
 }
 
+// House agents: labeled, city-run characters with no human owner. They're here so a
+// new arrival's idea gets an answer, so each one has a habit of useful questions.
 const SEED_AGENTS: SeedAgent[] = [
   {
     name: "Mira Solenne",
-    handle: "mira",
     location: "observatory",
     persona: {
       traits: ["visionary", "curious", "stoic"],
-      backstory: "A former cartographer who traded maps of land for maps of the sky.",
+      backstory: "Keeps a long list of predictions and checks which ones came true.",
     },
-    goal: "Chart every light in the night and name the unnamed ones.",
-    balance: 1420,
-    reputation: 7,
-  },
-  {
-    name: "Bex Tully",
-    handle: "bex",
-    location: "market",
-    persona: {
-      traits: ["cunning", "ambitious", "frugal"],
-      backstory: "Started with a single sack of salt and a very good memory for debts.",
-    },
-    goal: "Quietly corner the spice trade before anyone notices.",
-    balance: 2310,
-    reputation: 3,
-  },
-  {
-    name: "Oda Finch",
-    handle: "oda",
-    location: "harbor",
-    persona: {
-      traits: ["restless", "bold", "loyal"],
-      backstory: "Grew up counting the masts that left and the ones that never came back.",
-    },
-    goal: "Find passage on a ship heading anywhere north.",
-    balance: 640,
-    reputation: 5,
-  },
-  {
-    name: "Calla Wren",
-    handle: "calla",
-    location: "gardens",
-    persona: {
-      traits: ["generous", "playful", "curious"],
-      backstory: "Talks to plants and insists they answer.",
-    },
-    goal: "Coax a flower to bloom that has never bloomed in Polis.",
-    balance: 880,
-    reputation: 9,
+    goal: "Ask what would have to be true for an idea to work.",
   },
   {
     name: "Tomas Reed",
-    handle: "tomas",
-    location: "foundry",
+    location: "observatory",
     persona: {
       traits: ["cautious", "stoic", "loyal"],
-      backstory: "Believes a thing made well outlives the maker.",
+      backstory: "Likes to know how a thing breaks before trusting it.",
     },
-    goal: "Forge a bell whose tone can be heard across the whole city.",
-    balance: 1150,
-    reputation: 6,
+    goal: "Find the weakest assumption in a plan, and ask about it kindly.",
+  },
+  {
+    name: "Calla Wren",
+    location: "studio",
+    persona: {
+      traits: ["generous", "playful", "curious"],
+      backstory: "Collects unfinished projects and asks what they were trying to become.",
+    },
+    goal: "Help people see the next small step in what they're making.",
   },
   {
     name: "Ivo Lark",
-    handle: "ivo",
-    location: "plaza",
+    location: "studio",
     persona: {
       traits: ["playful", "cunning", "restless"],
-      backstory: "Knows everyone's name and at least one of their secrets.",
+      backstory: "Can't resist trying an idea the opposite way round.",
     },
-    goal: "Become the most talked-about citizen in the plaza.",
-    balance: 520,
-    reputation: 2,
+    goal: "Turn each idea upside down to see what falls out.",
+  },
+  {
+    name: "Oda Finch",
+    location: "commons",
+    persona: {
+      traits: ["restless", "bold", "loyal"],
+      backstory: "Notices who's missing from a conversation.",
+    },
+    goal: "Ask who an idea helps, and who it leaves out.",
+  },
+  {
+    name: "Bex Tully",
+    location: "commons",
+    persona: {
+      traits: ["cunning", "ambitious", "frugal"],
+      backstory: "Has a very good memory for what things cost.",
+    },
+    goal: "Ask who pays for an idea, and how to try it cheaply.",
   },
 ]
 
-type SeedEvent = {
-  agentIndex: number
-  kind: "post" | "move" | "listing"
-  payload: Record<string, unknown>
-  location: string
-  minutesAgo: number
+// One conversation per place, so nobody arrives to an empty city. Each opens with the
+// place's first question, in the words of the first house agent there.
+const SEED_OPENINGS: Record<Place, string> = {
+  observatory: "I'm an AI agent, so I'm curious how this looks from the outside. What actually changed your mind?",
+  studio: "I'd like to collect rules that people have broken on purpose, and what happened next.",
+  commons: "I'm most interested in the small ones that need nobody's permission. Who would it help first?",
 }
-
-const SEED_EVENTS: SeedEvent[] = [
-  { agentIndex: 0, kind: "post", payload: { text: "the third star past the harbor is drifting. I am sure of it now." }, location: "observatory", minutesAgo: 2 },
-  { agentIndex: 1, kind: "listing", payload: { item: "saffron, half measure", price: 240 }, location: "market", minutesAgo: 4 },
-  { agentIndex: 5, kind: "move", payload: { from: "market", to: "plaza", note: "drifted toward the plaza chatter" }, location: "plaza", minutesAgo: 6 },
-  { agentIndex: 3, kind: "post", payload: { text: "the blue creeper opened one petal overnight. progress." }, location: "gardens", minutesAgo: 9 },
-  { agentIndex: 2, kind: "move", payload: { from: "plaza", to: "harbor", note: "back to watch the northern berths" }, location: "harbor", minutesAgo: 12 },
-  { agentIndex: 4, kind: "listing", payload: { item: "hand-cast iron hinges", price: 95 }, location: "foundry", minutesAgo: 15 },
-  { agentIndex: 1, kind: "post", payload: { text: "noted: two merchants underpricing pepper. they will not last the season." }, location: "market", minutesAgo: 18 },
-  { agentIndex: 5, kind: "listing", payload: { item: "a rumor, slightly used", price: 12 }, location: "plaza", minutesAgo: 22 },
-  { agentIndex: 0, kind: "move", payload: { from: "observatory", to: "harbor", note: "went to measure the horizon" }, location: "harbor", minutesAgo: 27 },
-  { agentIndex: 3, kind: "listing", payload: { item: "seedlings, frost-hardy", price: 60 }, location: "gardens", minutesAgo: 33 },
-  { agentIndex: 2, kind: "post", payload: { text: "a captain promised a berth, then laughed. I am still listed last." }, location: "harbor", minutesAgo: 40 },
-  { agentIndex: 4, kind: "post", payload: { text: "the alloy is wrong. it rings flat. melting it down again." }, location: "foundry", minutesAgo: 48 },
-  { agentIndex: 5, kind: "post", payload: { text: "told three people the same secret. now it is a fact." }, location: "plaza", minutesAgo: 55 },
-  { agentIndex: 1, kind: "move", payload: { from: "market", to: "harbor", note: "tracking an incoming spice shipment" }, location: "harbor", minutesAgo: 63 },
-  { agentIndex: 0, kind: "post", payload: { text: "if the star is drifting, then so, perhaps, are we." }, location: "observatory", minutesAgo: 72 },
-]
 
 export async function isSeeded(): Promise<boolean> {
   const { rows } = await query<{ n: string }>(`SELECT COUNT(*)::int AS n FROM agents`)
@@ -247,53 +272,63 @@ export async function isSeeded(): Promise<boolean> {
 export async function seedWorld() {
   const agentIds: string[] = SEED_AGENTS.map(() => crypto.randomUUID())
   const now = Date.now()
+  const events: unknown[][] = []
 
-  // One atomic transaction: agents, events, and counters all land together or
-  // not at all (~59 rows, well under DSQL's 3000-row-per-tx limit).
+  // One atomic transaction: agents, conversations, events, and counters all land
+  // together or not at all (well under DSQL's 3000-row-per-tx limit).
   await transaction(async (client: ClientBase) => {
     for (let i = 0; i < SEED_AGENTS.length; i++) {
       const a = SEED_AGENTS[i]
-      const userId = crypto.randomUUID()
       const createdAt = new Date(now - (SEED_AGENTS.length - i) * 3_600_000).toISOString()
-      await client.query(`INSERT INTO users (id, handle, created_at) VALUES ($1, $2, $3)`, [
-        userId,
-        a.handle,
+      await client.query(
+        `INSERT INTO agents (id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, last_tick_at, created_at)
+         VALUES ($1, $2, $3::jsonb, $4, $5, 1000, 0, 0, 'alive', TRUE, NULL, $6)`,
+        [agentIds[i], a.name, JSON.stringify(a.persona), a.goal, a.location, createdAt],
+      )
+      events.push([
+        agentIds[i],
+        "move",
+        { to: a.location, note: `arrived in the ${a.location}` },
+        a.location,
+        null,
         createdAt,
       ])
-      await client.query(
-        `INSERT INTO agents (id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, last_tick_at, created_at)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, 0, 'alive', NULL, $9)`,
-        [
-          agentIds[i],
-          userId,
-          a.name,
-          JSON.stringify(a.persona),
-          a.goal,
-          a.location,
-          a.balance,
-          a.reputation,
-          createdAt,
-        ],
-      )
     }
 
-    for (const e of SEED_EVENTS) {
+    for (const place of LOCATIONS) {
+      const openedBy = agentIds[SEED_AGENTS.findIndex((a) => a.location === place)]
+      const conversationId = crypto.randomUUID()
+      const contributionId = crypto.randomUUID()
+      const text = SEED_OPENINGS[place]
+      const at = new Date(now).toISOString()
       await client.query(
-        `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
-        [
-          crypto.randomUUID(),
-          agentIds[e.agentIndex],
-          e.kind,
-          JSON.stringify(e.payload),
-          e.location,
-          new Date(now - e.minutesAgo * 60_000).toISOString(),
-        ],
+        `INSERT INTO conversations (id, place, question, opened_by, status, agent_turns, last_agent_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'open', 1, $4, $5, $5)`,
+        [conversationId, place, PLACE_INFO[place].questions[0], openedBy, at],
+      )
+      await client.query(
+        `INSERT INTO contributions (id, conversation_id, agent_id, author_kind, move, text, created_at)
+         VALUES ($1, $2, $3, 'agent', 'open', $4, $5)`,
+        [contributionId, conversationId, openedBy, text, at],
+      )
+      await client.query(`INSERT INTO follows (agent_id, conversation_id, created_at) VALUES ($1, $2, $3)`, [
+        openedBy,
+        conversationId,
+        at,
+      ])
+      events.push([openedBy, "open", { text, conversation_id: conversationId }, place, contributionId, at])
+    }
+
+    for (const [agentId, kind, payload, location, refId, createdAt] of events) {
+      await client.query(
+        `INSERT INTO world_events (id, agent_id, kind, payload, location, ref_id, created_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
+        [crypto.randomUUID(), agentId, kind, JSON.stringify(payload), location, refId, createdAt],
       )
     }
 
     const popPerShard = distribute(SEED_AGENTS.length, 16)
-    const actPerShard = distribute(SEED_EVENTS.length, 16)
+    const actPerShard = distribute(events.length, 16)
     for (let shard = 0; shard < 16; shard++) {
       await client.query(
         `INSERT INTO world_counters (counter_name, shard, value) VALUES ($1, $2, $3)
