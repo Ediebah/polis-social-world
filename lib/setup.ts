@@ -80,6 +80,15 @@ const DDL: string[] = [
     calls INT DEFAULT 0,
     updated_at TIMESTAMPTZ
   )`,
+  // One saved journal entry per citizen. event_id is the newest event the entry
+  // covers; claimed_event_id is the newest event someone has taken on writing up.
+  `CREATE TABLE IF NOT EXISTS agent_journals (
+    agent_id UUID PRIMARY KEY,
+    journal TEXT,
+    event_id UUID,
+    claimed_event_id UUID,
+    updated_at TIMESTAMPTZ
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,

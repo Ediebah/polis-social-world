@@ -346,6 +346,108 @@ describe("GET /api/journal/[id]", () => {
     expect((await (await read(id)).json()).journal).toBe("A proper entry.")
   })
 
+  async function addEvent(agentId: string, at = new Date().toISOString()) {
+    await query(
+      `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
+       VALUES ($1, $2, 'post', '{"text":"a new thought"}'::jsonb, 'plaza', $3)`,
+      [crypto.randomUUID(), agentId, at],
+    )
+  }
+
+  it("doesn't spend again on later views when the citizen has done nothing new", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("An entry worth keeping."))
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"))
+
+    await read(id)
+    vi.setSystemTime(new Date("2026-11-02T16:00:00Z"))
+    const later = await (await read(id)).json()
+
+    expect(later.journal).toBe("An entry worth keeping.")
+    expect(modelCallCount()).toBe(1)
+    expect((await getSpendStatus()).calls).toBe(1)
+  })
+
+  it("writes a new entry once the citizen has done something new", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => textResult(`Entry ${modelCallCount()}.`))
+
+    await read(id)
+    await addEvent(id, new Date(Date.now() + 1000).toISOString())
+    const body = await (await read(id)).json()
+
+    expect(body.journal).toBe("Entry 2.")
+    expect(modelCallCount()).toBe(2)
+  })
+
+  it("makes one call when many people open a citizen at once", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("Written once."))
+
+    const responses = await Promise.all(Array.from({ length: 8 }, () => read(id)))
+
+    expect(responses.every((r) => r.status === 200)).toBe(true)
+    expect(modelCallCount()).toBe(1)
+  })
+
+  it("tries again on the next visit when the call fails", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => {
+      throw new Error("provider down")
+    })
+
+    const failed = await (await read(id)).json()
+    onModelCall(async () => textResult("Back to normal."))
+    const next = await (await read(id)).json()
+
+    expect(failed.journal).toBe("Arrived in the plaza.")
+    expect(next.journal).toBe("Back to normal.")
+  })
+
+  it("keeps the newer entry when a slower writer finishes after it", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => {
+      if (modelCallCount() > 1) return textResult("Newer entry.")
+      await addEvent(id, new Date(Date.now() + 1000).toISOString())
+      await read(id)
+      return textResult("Older entry.")
+    })
+
+    await read(id)
+    const body = await (await read(id)).json()
+
+    expect(body.journal).toBe("Newer entry.")
+    expect(modelCallCount()).toBe(2)
+  })
+
+  it("stops at the visitors' share of the budget, leaving the rest for world updates", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("Should not be written."))
+    vi.stubEnv("DAILY_SPEND_CAP_USD", "1")
+    const day = new Date().toISOString().slice(0, 10)
+    await query(`INSERT INTO spend_days (day, reserved_micros, calls, updated_at) VALUES ($1, 600000, 0, $2)`, [
+      day,
+      new Date().toISOString(),
+    ])
+
+    const body = await (await read(id)).json()
+
+    expect(body.journal).toBe("Arrived in the plaza.")
+    expect(modelCallCount()).toBe(0)
+  })
+
+  it("shows the plain summary without spending when saved entries can't be reached", async () => {
+    const { id } = await newAgent()
+    onModelCall(async () => textResult("Should not be written."))
+    failNext(/agent_journals/, "42P01", 5)
+
+    const res = await read(id)
+
+    expect((await res.json()).journal).toBe("Arrived in the plaza.")
+    expect(modelCallCount()).toBe(0)
+  })
+
   it("doesn't use more of the budget on repeat views", async () => {
     const { id } = await newAgent()
 
