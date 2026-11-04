@@ -4,11 +4,11 @@ import { notFound } from "next/navigation"
 import { TopNav } from "@/components/top-nav"
 import { NudgeBox } from "@/components/nudge-box"
 import { Avatar } from "@/components/avatar"
+import { requireMember } from "@/lib/members"
 import { getAgentById, getAgentEvents, ownsAgent } from "@/lib/queries"
 import { query } from "@/lib/db"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { Coins, MapPin, Star, Target, Users } from "lucide-react"
-import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 import { AgentJournal } from "@/components/agent-journal"
 import { AgentVoiceAsk } from "@/components/agent-voice-ask"
 import { ShareIdeaForm } from "@/components/share-idea-form"
@@ -58,6 +58,7 @@ function Stat({
 }
 
 export default async function AgentPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireMember()
   const { id } = await params
   const agent = await getAgentById(id)
   if (!agent) notFound()
@@ -72,7 +73,6 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
     <div className="min-h-dvh">
       <TopNav />
       <main className="mx-auto max-w-3xl px-4 pb-24 pt-10">
-        <ClaimMyCitizen id={agent.id} name={agent.name} />
         <Link
           href="/"
           className="font-mono text-xs text-muted-foreground transition-colors hover:text-primary"

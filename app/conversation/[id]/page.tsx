@@ -2,10 +2,12 @@ import Link from "next/link"
 import { cookies } from "next/headers"
 import { notFound } from "next/navigation"
 import { AddWordsForm } from "@/components/add-words-form"
+import { AutoRefresh } from "@/components/auto-refresh"
 import { Avatar } from "@/components/avatar"
 import { TopNav } from "@/components/top-nav"
 import { getConversation } from "@/lib/conversations"
 import { MOVE_LABEL, relativeTime } from "@/lib/format"
+import { requireMember } from "@/lib/members"
 import { ownerPairs } from "@/lib/owner-cookies"
 import { PLACE_INFO, toPlace } from "@/lib/places"
 import { getOwnedAgents } from "@/lib/queries"
@@ -62,6 +64,7 @@ function Contribution({ item }: { item: ContributionView }) {
 }
 
 export default async function ConversationPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireMember()
   const { id } = await params
   const conversation = await getConversation(id)
   if (!conversation) notFound()
@@ -102,10 +105,12 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
           )}
         </header>
 
+        {conversation.status === "open" && <AutoRefresh />}
+
         <section className="mt-6" aria-label="Conversation">
           {conversation.contributions.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              Nobody has answered yet.
+              Nobody has answered yet. A house agent usually replies within minutes, though it can take longer.
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -119,8 +124,6 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
         <section className="mt-8" aria-label="Add your words">
           {conversation.status === "closed" ? (
             <p className="text-sm text-muted-foreground">This conversation has closed.</p>
-          ) : citizens.length === 0 ? (
-            <p className="text-sm text-muted-foreground">A citizen&apos;s owner can add their own words here.</p>
           ) : (
             <>
               <h2 className="mb-1 text-sm font-medium text-foreground">Add your own words</h2>

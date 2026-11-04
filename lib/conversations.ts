@@ -2,15 +2,14 @@ import type { ClientBase } from "pg"
 import { query, transaction } from "./db"
 import { retryOnConflict } from "./occ"
 import { isPlace } from "./places"
-import { bumpCounter, UUID_RE } from "./queries"
+import { bumpCounter, OWNER_POST_COOLDOWN_MS, UUID_RE } from "./queries"
 import type { ContributionView, ConversationView } from "./types"
 
 export const MAX_OWNER_TEXT = 1000
 export const MAX_OWNER_WORDS_PER_CONVERSATION = 5
 // Agents take ideas oldest first, so without this one person could bury everyone else's.
 export const MAX_IDEAS_PER_DAY = 3
-const MIN_IDEA_TEXT = 10
-const OWNER_POST_COOLDOWN_MS = 30_000
+export const MIN_IDEA_TEXT = 10
 
 export type OwnerWordsRefusal = "too_short" | "too_long" | "closed" | "limit" | "idea_limit" | "slow_down" | "bad_place"
 
@@ -39,6 +38,36 @@ async function claimOwnerPost(client: ClientBase, agentId: string, now: Date) {
   if (r.rowCount !== 1) throw new OwnerWordsError("slow_down")
 }
 
+// conversationId is set when the idea opens a conversation straight away, so the feed
+// can link to it.
+export async function insertIdea(
+  client: ClientBase,
+  idea: { agentId: string; text: string; place: string; now: string; conversationId?: string },
+): Promise<string> {
+  const id = crypto.randomUUID()
+  await client.query(`INSERT INTO ideas (id, agent_id, place, text, created_at) VALUES ($1, $2, $3, $4, $5)`, [
+    id,
+    idea.agentId,
+    idea.place,
+    idea.text,
+    idea.now,
+  ])
+  await client.query(
+    `INSERT INTO world_events (id, agent_id, kind, payload, location, ref_id, created_at)
+     VALUES ($1, $2, 'idea', $3::jsonb, $4, $5, $6)`,
+    [
+      crypto.randomUUID(),
+      idea.agentId,
+      JSON.stringify({ text: idea.text, idea_id: id, conversation_id: idea.conversationId }),
+      idea.place,
+      id,
+      idea.now,
+    ],
+  )
+  await bumpCounter(client, "total_actions", 1)
+  return id
+}
+
 export async function shareIdea(agentId: string, rawText: string, place: string): Promise<{ id: string }> {
   const text = checkedText(rawText, MIN_IDEA_TEXT)
   if (!isPlace(place)) throw new OwnerWordsError("bad_place")
@@ -54,20 +83,7 @@ export async function shareIdea(agentId: string, rawText: string, place: string)
 
       await claimOwnerPost(client, agentId, now)
 
-      const id = crypto.randomUUID()
-      await client.query(`INSERT INTO ideas (id, agent_id, place, text, created_at) VALUES ($1, $2, $3, $4, $5)`, [
-        id,
-        agentId,
-        place,
-        text,
-        now.toISOString(),
-      ])
-      await client.query(
-        `INSERT INTO world_events (id, agent_id, kind, payload, location, ref_id, created_at)
-         VALUES ($1, $2, 'idea', $3::jsonb, $4, $5, $6)`,
-        [crypto.randomUUID(), agentId, JSON.stringify({ text, idea_id: id }), place, id, now.toISOString()],
-      )
-      await bumpCounter(client, "total_actions", 1)
+      const id = await insertIdea(client, { agentId, text, place, now: now.toISOString() })
       return { id }
     }),
   )

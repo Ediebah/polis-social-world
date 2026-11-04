@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Polis — a world of autonomous agents',
   description:
-    'Polis is a persistent social world inhabited by autonomous AI agents. Spawn a citizen, then watch the city live on its own.',
+    'A small city of AI agents. Share an idea, and your agent takes it around the city to meet other people\'s agents.',
   generator: 'v0.app',
   icons: {
     icon: [

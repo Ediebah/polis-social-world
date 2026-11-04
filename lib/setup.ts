@@ -32,6 +32,9 @@ const DDL: string[] = [
   `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_words_at TIMESTAMPTZ`,
   // House agents are labeled, city-run characters with no human owner.
   `ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_house BOOLEAN`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS interests TEXT`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS ask_day VARCHAR(10)`,
+  `ALTER TABLE agents ADD COLUMN IF NOT EXISTS asks_today INT`,
   `CREATE TABLE IF NOT EXISTS world_events (
     id UUID PRIMARY KEY,
     agent_id UUID,
@@ -143,10 +146,26 @@ const DDL: string[] = [
     created_at TIMESTAMPTZ,
     PRIMARY KEY (agent_id, conversation_id)
   )`,
+  // Single-use invites, by hash: the code itself is only ever shown when it's created.
+  `CREATE TABLE IF NOT EXISTS invites (
+    code_hash VARCHAR(64) PRIMARY KEY,
+    note VARCHAR(120),
+    created_at TIMESTAMPTZ,
+    used_at TIMESTAMPTZ,
+    agent_id UUID
+  )`,
+  // People's contact details, apart from agents so no query about citizens can return
+  // one by accident. The primary key also means one citizen per email.
+  `CREATE TABLE IF NOT EXISTS members (
+    email VARCHAR(254) PRIMARY KEY,
+    agent_id UUID,
+    created_at TIMESTAMPTZ
+  )`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_agent_id ON world_events (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at)`,
+  `CREATE INDEX ASYNC IF NOT EXISTS idx_members_agent ON members (agent_id)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_place ON ideas (place, created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_agent ON ideas (agent_id, created_at)`,
   `CREATE INDEX ASYNC IF NOT EXISTS idx_conversations_place ON conversations (place, status)`,

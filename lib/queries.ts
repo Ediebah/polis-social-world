@@ -5,17 +5,15 @@ import type { Agent, FeedItem, Persona, WorldCounts, WorldEvent } from "./types"
 
 const COUNTER_SHARDS = 16
 
-// Citizens who have never been tried go first in the tick queue, and spawning is public.
-// Each slot offers 3 turns (288 a day), so this limit leaves most of them for
-// everyone else, however many spawns someone attempts.
-const DAILY_SPAWN_LIMIT = 50
+// The wait between anything a person posts: words, ideas and nudges.
+export const OWNER_POST_COOLDOWN_MS = 30_000
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Columns of `agents` that are safe to read into the app / send to clients.
 // Deliberately excludes owner_token so the ownership secret never leaks.
 const AGENT_COLUMNS =
-  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, last_tick_at, created_at"
+  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, interests, last_tick_at, created_at"
 
 function toNum(v: unknown): number {
   if (v === null || v === undefined) return 0
@@ -61,6 +59,7 @@ export async function getFeed(limit = 40): Promise<FeedItem[]> {
 }
 
 export async function getAgentById(id: string): Promise<Agent | null> {
+  if (!UUID_RE.test(id)) return null
   const { rows } = await query<Agent & { persona: unknown }>(
     `SELECT ${AGENT_COLUMNS} FROM agents WHERE id = $1`,
     [id],
@@ -110,7 +109,7 @@ export async function getOwnedAgents(
   const { rows } = await query<{ id: string; name: string; owner_token: string }>(
     `SELECT id::text AS id, name, owner_token::text AS owner_token
        FROM agents
-      WHERE id::text = ANY($1)
+      WHERE id::text = ANY($1) AND status = 'alive'
       ORDER BY created_at ASC`,
     [ids],
   )
@@ -131,51 +130,26 @@ export async function bumpCounter(client: ClientBase, counter: string, delta = 1
   )
 }
 
-export interface SpawnInput {
+export interface NewCitizen {
   handle: string
   name: string
   traits: string[]
   backstory: string
   goal: string
+  interests?: string
   location: string
 }
 
-export interface SpawnResult {
+export interface CreatedCitizen {
   id: string
-  // Secret proof of ownership, stored on the agent row and handed to the
-  // spawner (via an httpOnly cookie) so only they can nudge this citizen.
+  // Secret proof of ownership, stored on the agent row and handed to its owner (via
+  // an httpOnly cookie) so only they can act for this citizen.
   ownerToken: string
 }
 
-export class SpawnLimitError extends Error {
-  constructor() {
-    super("daily spawn limit reached")
-    this.name = "SpawnLimitError"
-  }
-}
-
-// Atomically counts this spawn against today's limit (UTC). Reads go through named
-// counters (see getWorldCounts), so these never show up in the public totals.
-async function claimDailySpawn(): Promise<boolean> {
-  const counter = `spawns:${new Date().toISOString().slice(0, 10)}`
-  return retryOnConflict(async () => {
-    await query(
-      `INSERT INTO world_counters (counter_name, shard, value) VALUES ($1, 0, 0)
-       ON CONFLICT (counter_name, shard) DO NOTHING`,
-      [counter],
-    )
-    const r = await query(
-      `UPDATE world_counters SET value = value + 1
-        WHERE counter_name = $1 AND shard = 0 AND value < $2`,
-      [counter, DAILY_SPAWN_LIMIT],
-    )
-    return (r.rowCount ?? 0) === 1
-  })
-}
-
-export async function spawnAgent(input: SpawnInput): Promise<SpawnResult> {
-  if (!(await claimDailySpawn())) throw new SpawnLimitError()
-
+// Runs inside the caller's transaction: agent, owner, arrival event, and counters either
+// all land or none do, with no orphan agents and no counter drift on partial failure.
+export async function createCitizen(client: ClientBase, input: NewCitizen): Promise<CreatedCitizen> {
   const userId = crypto.randomUUID()
   const agentId = crypto.randomUUID()
   const eventId = crypto.randomUUID()
@@ -183,33 +157,25 @@ export async function spawnAgent(input: SpawnInput): Promise<SpawnResult> {
   const persona: Persona = { traits: input.traits, backstory: input.backstory }
   const now = new Date().toISOString()
 
-  // One atomic transaction: agent, owner, arrival event, and counters either all
-  // land or none do — no orphan agents and no counter drift on partial failure.
-  await transaction(async (client) => {
-    await client.query(`INSERT INTO users (id, handle, created_at) VALUES ($1, $2, $3)`, [
-      userId,
-      input.handle,
+  await client.query(`INSERT INTO users (id, handle, created_at) VALUES ($1, $2, $3)`, [userId, input.handle, now])
+  await client.query(
+    `INSERT INTO agents (id, owner_user_id, owner_token, name, persona, goal, interests, location, balance, reputation, next_tick_seq, status, last_tick_at, created_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 1000, 0, 0, 'alive', NULL, $9)`,
+    [agentId, userId, ownerToken, input.name, JSON.stringify(persona), input.goal, input.interests ?? null, input.location, now],
+  )
+  await client.query(
+    `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
+     VALUES ($1, $2, 'move', $3::jsonb, $4, $5)`,
+    [
+      eventId,
+      agentId,
+      JSON.stringify({ to: input.location, note: `arrived in the ${input.location}` }),
+      input.location,
       now,
-    ])
-    await client.query(
-      `INSERT INTO agents (id, owner_user_id, owner_token, name, persona, goal, location, balance, reputation, next_tick_seq, status, last_tick_at, created_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 1000, 0, 0, 'alive', NULL, $8)`,
-      [agentId, userId, ownerToken, input.name, JSON.stringify(persona), input.goal, input.location, now],
-    )
-    await client.query(
-      `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
-       VALUES ($1, $2, 'move', $3::jsonb, $4, $5)`,
-      [
-        eventId,
-        agentId,
-        JSON.stringify({ to: input.location, note: `arrived in the ${input.location}` }),
-        input.location,
-        now,
-      ],
-    )
-    await bumpCounter(client, "population", 1)
-    await bumpCounter(client, "total_actions", 1)
-  })
+    ],
+  )
+  await bumpCounter(client, "population", 1)
+  await bumpCounter(client, "total_actions", 1)
 
   return { id: agentId, ownerToken }
 }
@@ -228,23 +194,32 @@ export async function ownsAgent(agentId: string, token: string | null | undefine
   return rows.length > 0
 }
 
+// A nudge writes to the shared feed, so it shares the wait between posts. One during
+// the wait is quietly ignored.
 export async function nudgeAgentGoal(agentId: string, goal: string): Promise<void> {
   const agent = await getAgentById(agentId)
   if (!agent) throw new Error("Agent not found")
-  const now = new Date().toISOString()
-  await transaction(async (client) => {
-    await client.query(`UPDATE agents SET goal = $1 WHERE id = $2`, [goal, agentId])
-    await client.query(
-      `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
-       VALUES ($1, $2, 'post', $3::jsonb, $4, $5)`,
-      [
-        crypto.randomUUID(),
-        agentId,
-        JSON.stringify({ text: `reconsidered its purpose: "${goal}"` }),
-        agent.location,
-        now,
-      ],
-    )
-    await bumpCounter(client, "total_actions", 1)
-  })
+  await retryOnConflict(() =>
+    transaction(async (client) => {
+      const now = new Date()
+      const nudged = await client.query(
+        `UPDATE agents SET goal = $1, last_words_at = $2
+          WHERE id = $3 AND (last_words_at IS NULL OR last_words_at < $4)`,
+        [goal, now.toISOString(), agentId, new Date(now.getTime() - OWNER_POST_COOLDOWN_MS).toISOString()],
+      )
+      if (nudged.rowCount !== 1) return
+      await client.query(
+        `INSERT INTO world_events (id, agent_id, kind, payload, location, created_at)
+         VALUES ($1, $2, 'post', $3::jsonb, $4, $5)`,
+        [
+          crypto.randomUUID(),
+          agentId,
+          JSON.stringify({ text: `reconsidered its purpose: "${goal}"` }),
+          agent.location,
+          now.toISOString(),
+        ],
+      )
+      await bumpCounter(client, "total_actions", 1)
+    }),
+  )
 }

@@ -15,6 +15,7 @@ export interface Agent {
   next_tick_seq: number
   status: string
   is_house: boolean | null
+  interests: string | null
   last_tick_at: string | null
   created_at: string
 }

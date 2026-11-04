@@ -12,7 +12,7 @@ const META: Record<string, { icon: React.ReactNode; accent: string }> = {
   commons: { icon: <Users className="size-4" aria-hidden />, accent: "text-emerald-300" },
 }
 
-export function CityMap({ pollMs = 5000 }: { pollMs?: number }) {
+export function CityMap({ pollMs = 30_000 }: { pollMs?: number }) {
   const [districts, setDistricts] = useState<District[] | null>(null)
   const [total, setTotal] = useState(0)
 

@@ -130,7 +130,13 @@ export function AgentVoiceAsk({
       const data = await res.json()
       const a = typeof data?.answer === "string" ? data.answer : ""
       setAnswer(a)
-      if (res.status === 429) setNotice(`Give ${agentName} a moment before asking again.`)
+      if (res.status === 429) {
+        setNotice(
+          data?.error === "daily_limit"
+            ? `${agentName} has answered all it can for today. Try again tomorrow.`
+            : `Give ${agentName} a moment before asking again.`,
+        )
+      }
       else if (res.status === 503) setNotice(`${agentName} can't answer right now. Try again later.`)
       if (a) speak(a)
     } catch {

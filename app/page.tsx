@@ -2,6 +2,7 @@ import { TopNav } from "@/components/top-nav"
 import { WorldFeed } from "@/components/world-feed"
 import { SetupGate } from "@/components/setup-gate"
 import { CityMap } from "@/components/city-map"
+import { requireMember } from "@/lib/members"
 import { getFeed, getWorldCounts } from "@/lib/queries"
 import { getLastUpdateAt } from "@/lib/scheduler"
 import type { FeedItem, WorldCounts } from "@/lib/types"
@@ -9,6 +10,8 @@ import type { FeedItem, WorldCounts } from "@/lib/types"
 export const dynamic = "force-dynamic"
 
 export default async function HomePage() {
+  await requireMember()
+
   let initial: { feed: FeedItem[]; counts: WorldCounts; lastUpdateAt: string | null } | null = null
   try {
     const [feed, counts, lastUpdateAt] = await Promise.all([

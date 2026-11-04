@@ -1,10 +1,11 @@
 // app/api/search/route.ts
 import { NextResponse } from "next/server"
 import { query } from "@/lib/db"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(req: Request) {
+export const GET = memberRoute(async (req) => {
   const { searchParams } = new URL(req.url)
   const q = (searchParams.get("q") ?? "").trim().slice(0, 60)
   if (q.length < 1) return NextResponse.json({ results: [] })
@@ -26,4 +27,4 @@ export async function GET(req: Request) {
     console.error("[polis] search error:", err)
     return NextResponse.json({ results: [] })
   }
-}
+})

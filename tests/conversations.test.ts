@@ -6,7 +6,8 @@ import {
   OwnerWordsError,
   shareIdea,
 } from "@/lib/conversations"
-import { spawnAgent } from "@/lib/queries"
+import { getAgentById } from "@/lib/queries"
+import { spawnAgent } from "./helpers/citizens"
 import { failNext, query } from "./helpers/fake-db"
 
 function newAgent(name = "Ada") {
@@ -215,6 +216,12 @@ describe("adding your own words", () => {
 
     const { rows } = await query(`SELECT count(*)::int AS n FROM contributions`)
     expect(rows[0].n).toBe(1)
+  })
+})
+
+describe("reading a citizen", () => {
+  it("returns null for a malformed id, rather than a database error", async () => {
+    await expect(getAgentById("not-a-uuid")).resolves.toBeNull()
   })
 })
 

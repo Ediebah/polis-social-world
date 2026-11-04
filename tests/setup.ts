@@ -8,7 +8,7 @@ vi.mock("@ai-sdk/anthropic", async () => {
   return { anthropic: () => model }
 })
 
-const TABLES = ["users", "agents", "world_events", "world_counters", "ledger", "relationships", "tick_runs", "spend_days", "agent_journals", "ideas", "conversations", "contributions", "memories", "follows"]
+const TABLES = ["users", "agents", "world_events", "world_counters", "ledger", "relationships", "tick_runs", "spend_days", "agent_journals", "ideas", "conversations", "contributions", "memories", "follows", "invites", "members"]
 
 beforeAll(async () => {
   await startDb()

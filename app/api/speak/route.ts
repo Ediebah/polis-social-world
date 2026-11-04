@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server"
 import { PollyClient, SynthesizeSpeechCommand, type VoiceId } from "@aws-sdk/client-polly"
 import { AWS_REGION, voiceCredentials, voiceEnabled } from "@/lib/aws"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 30
@@ -32,7 +33,7 @@ function pickVoice(seed: string): VoiceId {
 
 const client = new PollyClient({ region: AWS_REGION, credentials: voiceCredentials() })
 
-export async function POST(req: Request) {
+export const POST = memberRoute(async (req) => {
   if (!voiceEnabled()) return new NextResponse(null, { status: 503 })
   try {
     const body = await req.json().catch(() => ({}))
@@ -59,4 +60,4 @@ export async function POST(req: Request) {
     // Non-OK -> the client falls back to browser speech synthesis.
     return new NextResponse(null, { status: 502 })
   }
-}
+})

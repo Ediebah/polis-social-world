@@ -2,10 +2,11 @@ import { NextResponse } from "next/server"
 import { query } from "@/lib/db"
 import { toPlace } from "@/lib/places"
 import { LOCATIONS } from "@/lib/types"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 
-export async function GET() {
+export const GET = memberRoute(async () => {
   try {
     const { rows } = await query<{ location: string; count: number }>(
       `SELECT location, COUNT(*)::int AS count
@@ -23,6 +24,6 @@ export async function GET() {
     return NextResponse.json({ districts, total })
   } catch (err) {
     console.error("[polis] citymap error:", err)
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: "unavailable" }, { status: 500 })
   }
-}
+})

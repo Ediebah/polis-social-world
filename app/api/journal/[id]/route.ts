@@ -9,6 +9,7 @@ import { query } from "@/lib/db"
 import { eventForAgent, stripMarkdown } from "@/lib/format"
 import { retryOnConflict } from "@/lib/occ"
 import { generateWithinBudget, SpendBlockedError } from "@/lib/spend"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 
@@ -143,7 +144,7 @@ async function currentEntry(agentId: string, agent: JournalAgent, events: Journa
   return entry
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export const GET = memberRoute(async (_req, { params }: { params: Promise<{ id: string }> }) => {
   const { id } = await params
   try {
     const agentRes = await query<JournalAgent>(`SELECT name, persona, goal FROM agents WHERE id = $1`, [id])
@@ -176,4 +177,4 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     console.error("[polis] journal error:", err)
     return NextResponse.json({ journal: "", lastEventAt: null })
   }
-}
+})

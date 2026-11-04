@@ -3,68 +3,83 @@
 import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
+import { after } from "next/server"
 import {
   addOwnerWords,
   OwnerWordsError,
   shareIdea,
   type OwnerWordsRefusal,
   MAX_IDEAS_PER_DAY,
+  MIN_IDEA_TEXT,
   MAX_OWNER_TEXT,
   MAX_OWNER_WORDS_PER_CONVERSATION,
 } from "@/lib/conversations"
-import { nudgeAgentGoal, ownsAgent, spawnAgent, SpawnLimitError } from "@/lib/queries"
-import { LOCATIONS, TRAIT_OPTIONS } from "@/lib/types"
-
-export type SpawnState = { error?: string }
+import { isAllowedName } from "@/lib/attribution"
+import { currentMember, JoinError, joinWithInvite, type JoinRefusal, type JoinResult } from "@/lib/members"
+import { isPlace } from "@/lib/places"
+import { nudgeAgentGoal, ownsAgent } from "@/lib/queries"
+import { welcomeReply } from "@/lib/simulation"
+import { TRAIT_OPTIONS } from "@/lib/types"
 
 // httpOnly cookie name that holds the owner token for a given agent. There is no
-// login, so this cookie is the proof that this browser spawned the citizen.
+// login, so this cookie is the proof that this browser owns the citizen.
 const ownerCookie = (agentId: string) => `polis-own-${agentId}`
 
 const GOAL_MAX = 400
+const MAX_NAME = 60
+const MAX_INTERESTS = 200
+const MAX_EMAIL = 254
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-export async function spawnAgentAction(_prev: SpawnState, formData: FormData): Promise<SpawnState> {
+// values come back with a refusal: React clears a form when its action finishes, and
+// nobody should lose what they wrote.
+export type JoinState = {
+  error?: string
+  values?: { name: string; interests: string; idea: string; email: string }
+}
+
+const JOIN_MESSAGES: Record<JoinRefusal, string> = {
+  invite: "This invite has already been used or isn't valid.",
+  email_taken: "That email already has a citizen. Each person gets one.",
+}
+
+export async function joinAction(_prev: JoinState, formData: FormData): Promise<JoinState> {
+  const code = String(formData.get("code") ?? "")
   const name = String(formData.get("name") ?? "").trim()
-  const handle = (
-    String(formData.get("handle") ?? "").trim() ||
-    name.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 30) ||
-    "citizen"
-  ).slice(0, 30)
-  const backstory = String(formData.get("backstory") ?? "").trim()
-  const goal = String(formData.get("goal") ?? "").trim()
-  const location = String(formData.get("location") ?? "commons").trim()
-  // Only accept known trait values, so a hand-crafted POST can't store junk.
-  const traits = formData
-    .getAll("traits")
-    .map((t) => String(t))
-    .filter((t) => (TRAIT_OPTIONS as readonly string[]).includes(t))
+  const interests = String(formData.get("interests") ?? "").trim()
+  const idea = String(formData.get("idea") ?? "").trim()
+  const email = String(formData.get("email") ?? "").trim()
+  const place = String(formData.get("place") ?? "")
+  const traits = formData.getAll("traits").map(String)
+  const refuse = (error: string): JoinState => ({ error, values: { name, interests, idea, email } })
 
-  if (name.length < 2) return { error: "Give your agent a name (at least 2 characters)." }
-  if (name.length > 60) return { error: "That name is too long (max 60 characters)." }
-  if (traits.length < 3 || traits.length > 5) return { error: "Pick between 3 and 5 personality traits." }
-  if (backstory.length < 10) return { error: "Add a short backstory (at least 10 characters)." }
-  if (backstory.length > 1000) return { error: "That backstory is too long (max 1000 characters)." }
-  if (goal.length < 5) return { error: "Give your agent a starting goal." }
-  if (goal.length > GOAL_MAX) return { error: `That goal is too long (max ${GOAL_MAX} characters).` }
-  const loc = (LOCATIONS as readonly string[]).includes(location) ? location : "commons"
+  if (await currentMember()) return refuse("You already have a citizen here.")
+  if (name.length < 2 || name.length > MAX_NAME) return refuse(`Give your agent a name of 2 to ${MAX_NAME} characters.`)
+  if (!isAllowedName(name)) return refuse("Your agent's name can use letters, numbers, spaces, hyphens, apostrophes and periods.")
+  // Only known trait values, so a hand-crafted POST can't store junk.
+  if (traits.length < 3 || traits.length > 5 || !traits.every((t) => (TRAIT_OPTIONS as readonly string[]).includes(t))) {
+    return refuse("Pick between 3 and 5 personality traits.")
+  }
+  if (interests.length < 3 || interests.length > MAX_INTERESTS) {
+    return refuse(`Tell us what you're interested in (up to ${MAX_INTERESTS} characters).`)
+  }
+  if (idea.length < MIN_IDEA_TEXT || idea.length > MAX_OWNER_TEXT) {
+    return refuse(`Your idea needs ${MIN_IDEA_TEXT} to ${MAX_OWNER_TEXT} characters.`)
+  }
+  if (!isPlace(place)) return refuse("Pick one of the city's places.")
+  if (email.length > MAX_EMAIL || !EMAIL_RE.test(email)) return refuse("That email doesn't look right.")
 
-  let agentId: string
-  let ownerToken: string
+  let joined: JoinResult
   try {
-    const res = await spawnAgent({ handle, name, traits, backstory, goal, location: loc })
-    agentId = res.id
-    ownerToken = res.ownerToken
+    joined = await joinWithInvite({ code, email, name, traits, interests, idea, place })
   } catch (err) {
-    if (err instanceof SpawnLimitError) {
-      return { error: "The city has welcomed all the new citizens it can for today. Please try again tomorrow." }
-    }
-    console.error("[v0] spawn error:", err)
-    return { error: "Something went wrong spawning your agent. Please try again." }
+    if (err instanceof JoinError) return refuse(JOIN_MESSAGES[err.reason])
+    console.error("[polis] join error:", err)
+    return refuse("Something went wrong. Please try again.")
   }
 
-  // Remember ownership server-side so only this browser can nudge the citizen.
   const store = await cookies()
-  store.set(ownerCookie(agentId), ownerToken, {
+  store.set(ownerCookie(joined.id), joined.ownerToken, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -72,9 +87,12 @@ export async function spawnAgentAction(_prev: SpawnState, formData: FormData): P
     maxAge: 60 * 60 * 24 * 365,
   })
 
+  // After responding, so nobody waits on the model to join. If this fails, the regular
+  // queue reaches the conversation later.
+  after(() => welcomeReply(joined.conversationId).catch((err) => console.error("[polis] welcome error:", err)))
+
   revalidatePath("/")
-  // ?me=1 lets the agent page remember this as "your" citizen (no login).
-  redirect(`/agent/${agentId}?me=1`)
+  redirect(`/conversation/${joined.conversationId}`)
 }
 
 export async function nudgeAction(formData: FormData): Promise<void> {

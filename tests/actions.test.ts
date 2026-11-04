@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { addWordsAction, shareIdeaAction } from "@/app/actions"
-import { spawnAgent } from "@/lib/queries"
+import { addWordsAction, nudgeAction, shareIdeaAction } from "@/app/actions"
+import { spawnAgent } from "./helpers/citizens"
 import { query } from "./helpers/fake-db"
 
 const cookieJar = new Map<string, string>()
@@ -94,6 +94,34 @@ describe("adding your words", () => {
     const state = await addWordsAction({}, form({ agentId: id, conversationId, text: words }))
 
     expect(state.text).toBe(words)
+  })
+})
+
+describe("nudging", () => {
+  async function nudge(id: string, goal: string) {
+    await nudgeAction(form({ agentId: id, goal }))
+    const goalNow = await query(`SELECT goal FROM agents WHERE id = $1`, [id])
+    const events = await query(`SELECT count(*)::int AS n FROM world_events WHERE agent_id = $1 AND kind = 'post'`, [id])
+    return { goal: goalNow.rows[0].goal, events: events.rows[0].n }
+  }
+
+  it("works for the owner, and can't flood the feed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"))
+    const { id, ownerToken } = await spawn()
+    cookieJar.set(`polis-own-${id}`, ownerToken)
+
+    await expect(nudge(id, "A first new goal.")).resolves.toEqual({ goal: "A first new goal.", events: 1 })
+    vi.setSystemTime(new Date("2026-11-03T10:00:20Z"))
+    await expect(nudge(id, "A second new goal.")).resolves.toEqual({ goal: "A first new goal.", events: 1 })
+    vi.setSystemTime(new Date("2026-11-03T10:00:31Z"))
+    await expect(nudge(id, "A third new goal.")).resolves.toEqual({ goal: "A third new goal.", events: 2 })
+  })
+
+  it("does nothing for anyone else", async () => {
+    const { id } = await spawn()
+
+    await expect(nudge(id, "A hijacked goal.")).resolves.toEqual({ goal: "Find a good question.", events: 0 })
   })
 })
 

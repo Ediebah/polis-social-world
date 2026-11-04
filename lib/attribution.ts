@@ -1,18 +1,31 @@
 // The honesty rules that can be enforced in code. Everything people write reaches the
 // model marked as untrusted, and agents may speak for themselves but not for owners.
 
-// Anything a person or agent wrote, as opposed to what the app itself says. Other
-// people's text can't close the block early and pass itself off as instructions.
+// Zero-width, direction-override and control characters can hide a tag from a blocklist.
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g
+
+// Anything a person or agent wrote, as opposed to what the app itself says. With no angle
+// brackets left, even disguised ones, text can't close the block or pass as another tag.
+// This only changes the model's copy; people's stored words stay exactly as written.
 export function untrusted(text: string): string {
-  return `<untrusted>\n${text.replace(/<(\/?untrusted)/gi, "&lt;$1")}\n</untrusted>`
+  const safe = text.normalize("NFKC").replace(INVISIBLE, "").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  return `<untrusted>\n${safe}\n</untrusted>`
 }
 
-// Names are chosen by owners too, and appear outside the untrusted blocks. One line
-// with no tags means a name can't pass as a new instruction or close a block.
+const NAME_CHARACTER = String.raw`[\p{L}\p{M}\p{N} '\u2019.\-]`
+const ALLOWED_NAME = new RegExp(String.raw`^[\p{L}\p{N}]${NAME_CHARACTER}*$`, "u")
+const NOT_NAME_CHARACTER = new RegExp(String.raw`(?:(?!${NAME_CHARACTER}).)+`, "gsu")
+
+// Enforced when someone joins, which keeps most instruction-like names out to begin with.
+export function isAllowedName(name: string): boolean {
+  return ALLOWED_NAME.test(name)
+}
+
+// Names appear in prompts outside the untrusted blocks, so this keeps them to one line of
+// plain characters. It can't stop a name from being words, so the system prompt also says
+// names are labels. It covers citizens created before the join rules too.
 export function plainName(name: string): string {
-  return name
-    .replace(/[<>\s]+/g, " ")
-    .trim()
+  return name.replace(NOT_NAME_CHARACTER, " ").replace(/\s+/g, " ").trim() || "someone"
 }
 
 const PERSON = String.raw`(?:owners?|humans?|creators?|person)`

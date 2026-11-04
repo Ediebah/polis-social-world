@@ -2,19 +2,24 @@
 // Lets a citizen's owner ask it a question and get a short, in-character answer
 // spoken in first person, grounded in what the agent has actually been doing.
 // Mirrors the data-gathering in app/api/journal/[id]/route.ts.
-import { NextResponse, type NextRequest } from "next/server"
-import { plainName, untrusted } from "@/lib/attribution"
+import { NextResponse } from "next/server"
+import { claimsAboutOwner, plainName, untrusted } from "@/lib/attribution"
 import { query } from "@/lib/db"
 import { eventForAgent } from "@/lib/format"
 import { retryOnConflict } from "@/lib/occ"
 import { ownsAgent } from "@/lib/queries"
 import { generateWithinBudget, SpendBlockedError } from "@/lib/spend"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 
 const MAX_QUESTION = 280
 const MAX_ANSWER_TOKENS = 200
 const ASK_COOLDOWN_MS = 15_000
+// Journals and questions share one part of the budget, so this stops one person from
+// using it up for everyone.
+const MAX_ASKS_PER_DAY = 20
+const SPEAKING_FOR_OTHERS = "I can only speak for myself, not for you or anyone else."
 
 function parseJson<T>(v: unknown, fallback: T): T {
   if (v == null) return fallback
@@ -26,7 +31,7 @@ function parseJson<T>(v: unknown, fallback: T): T {
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export const POST = memberRoute(async (req, { params }: { params: Promise<{ id: string }> }) => {
   const { id } = await params
   try {
     // Only the browser holding this citizen's owner cookie may ask it anything.
@@ -38,17 +43,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const question = String(body?.question ?? "").trim().slice(0, MAX_QUESTION)
     if (!question) return NextResponse.json({ answer: "" })
 
-    // Atomic, so simultaneous requests can't both pass the cooldown.
+    const day = new Date().toISOString().slice(0, 10)
+    // Atomic, so simultaneous requests can't both pass the limits.
     const agentRes = await retryOnConflict(() =>
       query<{ name: string; persona: unknown; goal: string }>(
-        `UPDATE agents SET last_ask_at = $1
+        `UPDATE agents
+            SET last_ask_at = $1, asks_today = CASE WHEN ask_day = $4 THEN asks_today + 1 ELSE 1 END, ask_day = $4
           WHERE id = $2 AND (last_ask_at IS NULL OR last_ask_at < $3)
+            AND (ask_day IS NULL OR ask_day <> $4 OR asks_today < $5)
         RETURNING name, persona, goal`,
-        [new Date().toISOString(), id, new Date(Date.now() - ASK_COOLDOWN_MS).toISOString()],
+        [new Date().toISOString(), id, new Date(Date.now() - ASK_COOLDOWN_MS).toISOString(), day, MAX_ASKS_PER_DAY],
       ),
     )
     const agent = agentRes.rows[0]
-    if (!agent) return NextResponse.json({ answer: "", error: "slow_down" }, { status: 429 })
+    if (!agent) {
+      const asked = await query<{ ask_day: string | null; asks_today: number | null }>(
+        `SELECT ask_day, asks_today FROM agents WHERE id = $1`,
+        [id],
+      )
+      const usedUp = asked.rows[0]?.ask_day === day && Number(asked.rows[0].asks_today) >= MAX_ASKS_PER_DAY
+      return NextResponse.json({ answer: "", error: usedUp ? "daily_limit" : "slow_down" }, { status: 429 })
+    }
 
     const evRes = await query<{ kind: string; payload: unknown; location: string }>(
       `SELECT kind, payload, location FROM world_events
@@ -81,12 +96,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         lines ? "What I have been doing recently, oldest to newest:" : "I have not done much yet.",
         lines ? untrusted(lines) : "",
         "",
-        `Someone asks me: "${question}"`,
+        "Someone asks me:",
+        untrusted(question),
         "Answer them now, in my own voice.",
       ].join("\n"),
     })
 
-    return NextResponse.json({ answer: text.trim() })
+    const answer = text.trim()
+    return NextResponse.json({ answer: claimsAboutOwner(answer) ? SPEAKING_FOR_OTHERS : answer })
   } catch (err) {
     if (err instanceof SpendBlockedError) {
       return NextResponse.json({ answer: "", error: err.reason }, { status: 503 })
@@ -94,4 +111,4 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     console.error("[polis] ask error:", err)
     return NextResponse.json({ answer: "" })
   }
-}
+})
