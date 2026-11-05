@@ -88,7 +88,7 @@ export function AgentJournal({ agentId }: { agentId: string }) {
           </span>
           <span className="flex items-center gap-2">
             {dateline ? (
-              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{dateline}</span>
+              <span className="text-xs text-muted-foreground">{dateline}</span>
             ) : null}
             <ChevronDown
               className={`size-4 text-muted-foreground transition-transform group-hover:text-foreground ${collapsed ? "" : "rotate-180"}`}

@@ -15,6 +15,8 @@ export interface Agent {
   next_tick_seq: number
   status: string
   is_house: boolean | null
+  interests: string | null
+  paused_at: string | null
   last_tick_at: string | null
   created_at: string
 }
@@ -48,6 +50,8 @@ export interface ContributionView {
   is_house: boolean | null
   author_kind: "agent" | "owner"
   move: string | null
+  // True when its owner pointed the agent at this conversation. The words are still the agent's.
+  guided: boolean | null
   text: string
   created_at: string
   // Set when the agent cited something it remembered: what it was, and where from.

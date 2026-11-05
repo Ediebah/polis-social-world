@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { addWordsAction, shareIdeaAction } from "@/app/actions"
-import { spawnAgent } from "@/lib/queries"
+import { spawnAgent } from "./helpers/citizens"
 import { query } from "./helpers/fake-db"
 
 const cookieJar = new Map<string, string>()
@@ -147,5 +147,33 @@ describe("sharing an idea", () => {
     const state = await shareIdeaAction({}, form({ agentId: id, place: "commons", text: "short" }))
 
     expect(state).toMatchObject({ text: "short", place: "commons" })
+  })
+})
+
+describe("a suspended citizen's owner", () => {
+  async function suspended() {
+    const citizen = await spawn()
+    cookieJar.set(`polis-own-${citizen.id}`, citizen.ownerToken)
+    await query(`UPDATE agents SET status = 'suspended' WHERE id = $1`, [citizen.id])
+    return citizen
+  }
+
+  it("can't add words", async () => {
+    const { id } = await suspended()
+    const conversationId = await conversation()
+
+    const state = await addWordsAction({}, form({ agentId: id, conversationId, text: "Still here." }))
+
+    expect(state.error).toBeTruthy()
+    expect(await count("contributions")).toBe(0)
+  })
+
+  it("can't share an idea", async () => {
+    const { id } = await suspended()
+
+    const state = await shareIdeaAction({}, form({ agentId: id, place: "studio", text: "One more idea from me." }))
+
+    expect(state.error).toBeTruthy()
+    expect(await count("ideas")).toBe(0)
   })
 })

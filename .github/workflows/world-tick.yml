@@ -1,4 +1,5 @@
-# Advances the city every 15 minutes by calling the protected tick route.
+# Advances the city every 15 minutes by calling the protected tick route, then sends the
+# daily emails, which does nothing until the day's hour and then once per person.
 # Works on any Vercel plan. Runs are safe to repeat or delay, because the route runs
 # each 15-minute slot once. Needs the CRON_SECRET repository secret; without it, this
 # skips quietly and the city simply doesn't advance.
@@ -18,7 +19,7 @@ permissions: {}
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
       - name: Run this slot
         env:
@@ -31,3 +32,16 @@ jobs:
           curl --fail-with-body --silent --show-error --max-time 180 \
             --header "Authorization: Bearer $CRON_SECRET" \
             https://polis-social-world.vercel.app/api/tick
+
+      - name: Send today's emails
+        if: ${{ !cancelled() }}
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET isn't set; skipping."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error --max-time 130 \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            https://polis-social-world.vercel.app/api/daily-email

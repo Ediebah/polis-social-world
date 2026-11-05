@@ -46,6 +46,25 @@ COMMIT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_house BOOLEAN;
 COMMIT;
 
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS interests TEXT;
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS ask_day VARCHAR(10);
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS asks_today INT;
+COMMIT;
+
+-- A choice the owner made for this agent's next turn, never free text.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS guide_conversation_id UUID;
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS guide_move VARCHAR(12);
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS guide_at TIMESTAMPTZ;
+COMMIT;
+
 CREATE TABLE IF NOT EXISTS world_events (
   id UUID PRIMARY KEY,
   agent_id UUID,
@@ -161,6 +180,7 @@ CREATE TABLE IF NOT EXISTS contributions (
   move VARCHAR(12),
   text TEXT,
   memory_id UUID,
+  guided BOOLEAN,
   created_at TIMESTAMPTZ
 );
 COMMIT;
@@ -183,6 +203,125 @@ CREATE TABLE IF NOT EXISTS follows (
 );
 COMMIT;
 
+-- Single-use invites, by hash: the code itself is only ever shown when it's created.
+CREATE TABLE IF NOT EXISTS invites (
+  code_hash VARCHAR(64) PRIMARY KEY,
+  email VARCHAR(254),
+  note VARCHAR(120),
+  created_at TIMESTAMPTZ,
+  used_at TIMESTAMPTZ,
+  agent_id UUID
+);
+COMMIT;
+
+-- People's contact details, apart from agents so no query about citizens can return
+-- one by accident. The primary key also means one citizen per email.
+CREATE TABLE IF NOT EXISTS members (
+  email VARCHAR(254) PRIMARY KEY,
+  agent_id UUID,
+  link_hour VARCHAR(13),
+  links_this_hour INT,
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- One-time sign-in links, by hash: the token itself is only ever in the email.
+CREATE TABLE IF NOT EXISTS login_links (
+  token_hash VARCHAR(64) PRIMARY KEY,
+  agent_id UUID,
+  created_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  used_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- For databases that already have these tables from an earlier release.
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS email VARCHAR(254);
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS link_hour VARCHAR(13);
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS links_this_hour INT;
+COMMIT;
+
+ALTER TABLE contributions ADD COLUMN IF NOT EXISTS guided BOOLEAN;
+COMMIT;
+
+-- Blanked text stays as an empty row, so a conversation keeps its shape.
+ALTER TABLE ideas ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE contributions ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+COMMIT;
+
+-- The daily email and when someone was last here. digest_day is the claim on today's send,
+-- and digest_at is how far the last one covered, so nothing is missed or sent twice.
+ALTER TABLE members ADD COLUMN IF NOT EXISTS digest_day VARCHAR(10);
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS digest_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS email_off_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS email_token UUID;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS last_seen_day VARCHAR(10);
+COMMIT;
+
+-- Who reported what. It points at the words rather than copying them, so removing them
+-- leaves no copy here.
+CREATE TABLE IF NOT EXISTS reports (
+  id UUID PRIMARY KEY,
+  reporter_id UUID,
+  contribution_id UUID,
+  idea_id UUID,
+  agent_id UUID,
+  reason VARCHAR(24),
+  note VARCHAR(500),
+  created_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- What people do, for the pilot's numbers. Holds no text.
+CREATE TABLE IF NOT EXISTS product_events (
+  id UUID PRIMARY KEY,
+  agent_id UUID,
+  kind VARCHAR(24),
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
+CREATE TABLE IF NOT EXISTS place_follows (
+  agent_id UUID,
+  place VARCHAR(20),
+  created_at TIMESTAMPTZ,
+  PRIMARY KEY (agent_id, place)
+);
+COMMIT;
+
+-- One row per pair of people, whoever asked first. Contact details stay here until
+-- both have accepted.
+CREATE TABLE IF NOT EXISTS introductions (
+  pair_key VARCHAR(73) PRIMARY KEY,
+  requester_id UUID,
+  recipient_id UUID,
+  conversation_id UUID,
+  requester_contact VARCHAR(200),
+  recipient_contact VARCHAR(200),
+  status VARCHAR(10),
+  created_at TIMESTAMPTZ,
+  responded_at TIMESTAMPTZ
+);
+COMMIT;
+
 CREATE INDEX ASYNC IF NOT EXISTS idx_world_events_created_at ON world_events (created_at);
 COMMIT;
 
@@ -193,6 +332,15 @@ CREATE INDEX ASYNC IF NOT EXISTS idx_agents_owner ON agents (owner_user_id);
 COMMIT;
 
 CREATE INDEX ASYNC IF NOT EXISTS idx_ledger_agent ON ledger (agent_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_members_agent ON members (agent_id);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_introductions_requester ON introductions (requester_id, created_at);
+COMMIT;
+
+CREATE INDEX ASYNC IF NOT EXISTS idx_introductions_recipient ON introductions (recipient_id, created_at);
 COMMIT;
 
 CREATE INDEX ASYNC IF NOT EXISTS idx_ideas_place ON ideas (place, created_at);

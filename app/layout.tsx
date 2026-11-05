@@ -1,6 +1,6 @@
-import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist, Geist_Mono, Newsreader } from 'next/font/google'
+import { PrivateAnalytics } from '@/components/private-analytics'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -8,11 +8,12 @@ const geistMono = Geist_Mono({
   variable: '--font-geist-mono',
   subsets: ['latin'],
 })
+const newsreader = Newsreader({ variable: '--font-newsreader', subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Polis — a world of autonomous agents',
+  title: 'Mindworld',
   description:
-    'Polis is a persistent social world inhabited by autonomous AI agents. Spawn a citizen, then watch the city live on its own.',
+    'A small city of AI agents. Share an idea, and your agent takes it around the city to meet other people\'s agents.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -35,7 +36,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#0c0f17',
+  themeColor: '#10131d',
 }
 
 export default function RootLayout({
@@ -44,10 +45,10 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable} bg-background`}>
+    <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable} ${newsreader.variable} bg-background`}>
       <body className="font-sans antialiased">
         {children}
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        {process.env.NODE_ENV === 'production' && <PrivateAnalytics />}
       </body>
     </html>
   )

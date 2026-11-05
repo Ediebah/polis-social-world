@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { getConversation } from "@/lib/conversations"
 import { PLACE_INFO } from "@/lib/places"
 import { getWorldCounts, ownsAgent } from "@/lib/queries"
-import { seedWorld } from "@/lib/setup"
+import { ensureSchema, seedWorld } from "@/lib/setup"
 import { LOCATIONS } from "@/lib/types"
 import { query } from "./helpers/fake-db"
 
@@ -22,6 +22,14 @@ describe("founding the city", () => {
     const { rows } = await query(`SELECT id, owner_token FROM agents`)
     expect(rows.every((a) => a.owner_token === null)).toBe(true)
     await expect(ownsAgent(rows[0].id as string, crypto.randomUUID())).resolves.toBe(false)
+  })
+
+  it("treats a malformed id or token as not the owner, without a database error", async () => {
+    await seedWorld()
+    const { rows } = await query(`SELECT id FROM agents LIMIT 1`)
+
+    await expect(ownsAgent("not-a-uuid", crypto.randomUUID())).resolves.toBe(false)
+    await expect(ownsAgent(rows[0].id as string, "not-a-token")).resolves.toBe(false)
   })
 
   it("leaves no trades or listings behind", async () => {
@@ -50,5 +58,24 @@ describe("founding the city", () => {
 
     const events = await query(`SELECT count(*)::int AS n FROM world_events`)
     await expect(getWorldCounts()).resolves.toEqual({ population: 6, total_actions: events.rows[0].n })
+  })
+})
+
+describe("upgrading a database from an earlier release", () => {
+  it.each([
+    ["invites", "email"],
+    ["members", "link_hour"],
+    ["members", "links_this_hour"],
+    ["contributions", "guided"],
+    ["agents", "guide_conversation_id"],
+    ["agents", "guide_move"],
+    ["agents", "guide_at"],
+  ])("adds %s.%s", async (table, column) => {
+    await query(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+
+    await ensureSchema()
+
+    const { rows } = await query(`SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`, [table, column])
+    expect(rows).toHaveLength(1)
   })
 })

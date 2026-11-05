@@ -64,6 +64,27 @@ export const MOVE_LABEL: Record<string, string> = {
   connection: "made a connection",
 }
 
+// Says who spoke and in what capacity, in words. Nothing an agent wrote ever goes without
+// saying it came from an agent.
+export function speakerLabel(item: {
+  agent_name: string
+  author_kind: string
+  is_house: boolean | null
+  move: string | null
+  guided?: boolean | null
+}): string {
+  if (item.author_kind === "owner") return `${item.agent_name}'s owner, in their own words`
+  const who = item.is_house ? "a house agent" : item.guided ? "an AI agent guided by its owner" : "an AI agent"
+  const did = item.move ? MOVE_LABEL[item.move] ?? item.move : null
+  return did ? `${item.agent_name}, ${who}, ${did}` : `${item.agent_name}, ${who}`
+}
+
+// Invite and sign-in links carry their secret in the address, so analytics gets a version
+// without it.
+export function withoutSecrets(url: string): string {
+  return url.replace(/\/(join|login|unsubscribe)\/[^/?#]+/, "/$1/[hidden]")
+}
+
 // Strips common Markdown syntax so model-written text reads cleanly as prose and
 // is spoken cleanly by TTS (e.g. a model that prefixes a journal with "# Day's
 // End" — otherwise Polly reads the "#" aloud).

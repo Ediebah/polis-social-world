@@ -1,223 +1,101 @@
 import Link from "next/link"
-import { cookies } from "next/headers"
 import { notFound } from "next/navigation"
-import { TopNav } from "@/components/top-nav"
-import { NudgeBox } from "@/components/nudge-box"
-import { Avatar } from "@/components/avatar"
-import { getAgentById, getAgentEvents, ownsAgent } from "@/lib/queries"
-import { query } from "@/lib/db"
-import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
-import { Coins, MapPin, Star, Target, Users } from "lucide-react"
-import { ClaimMyCitizen } from "@/components/claim-my-citizen"
 import { AgentJournal } from "@/components/agent-journal"
-import { AgentVoiceAsk } from "@/components/agent-voice-ask"
-import { ShareIdeaForm } from "@/components/share-idea-form"
-import { toPlace } from "@/lib/places"
-import { voiceEnabled } from "@/lib/aws"
+import { Avatar } from "@/components/avatar"
+import { ReportForm } from "@/components/report-form"
+import { TopNav } from "@/components/top-nav"
+import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
+import { requireMember } from "@/lib/members"
+import { PLACE_INFO, toPlace } from "@/lib/places"
+import { getAgentById, getAgentEvents } from "@/lib/queries"
+import { cn } from "@/lib/utils"
 
 export const dynamic = "force-dynamic"
 
-type Connection = { other_id: string; other_name: string; sentiment: number }
-
-async function getConnections(id: string): Promise<Connection[]> {
-  try {
-    const { rows } = await query<Connection>(
-      `SELECT r.other_id, a.name AS other_name, r.sentiment
-         FROM relationships r
-         JOIN agents a ON a.id = r.other_id
-        WHERE r.agent_id = $1
-        ORDER BY r.sentiment DESC
-        LIMIT 12`,
-      [id],
-    )
-    return rows
-  } catch {
-    // relationships table may not exist yet (before setup) — fail soft.
-    return []
-  }
-}
-
-function Stat({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode
-  label: string
-  value: string
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-border/70 bg-card/50 px-4 py-3.5">
-      <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</span>
-    </div>
-  )
-}
-
 export default async function AgentPage({ params }: { params: Promise<{ id: string }> }) {
+  const member = await requireMember()
   const { id } = await params
   const agent = await getAgentById(id)
   if (!agent) notFound()
 
-  // True only for the browser that spawned this citizen (holds the owner cookie).
-  const ownerToken = (await cookies()).get(`polis-own-${id}`)?.value
-  const isOwner = await ownsAgent(id, ownerToken)
+  // Someone suspended or gone has nothing left to show.
+  if (agent.status !== "alive") {
+    return (
+      <div className="min-h-dvh">
+        <TopNav />
+        <main className="mx-auto max-w-2xl px-4 pb-28 pt-8">
+          <h1 className="font-serif text-3xl leading-tight text-foreground">No longer active</h1>
+          <p className="mt-2 text-sm text-muted-foreground">This citizen isn&apos;t in the city any more.</p>
+        </main>
+      </div>
+    )
+  }
 
-  const [events, connections] = await Promise.all([getAgentEvents(id, 20), getConnections(id)])
+  const events = await getAgentEvents(id, 20)
+  const here = toPlace(agent.location)
+  const isYours = agent.id === member.id
 
   return (
     <div className="min-h-dvh">
       <TopNav />
-      <main className="mx-auto max-w-3xl px-4 pb-24 pt-10">
-        <ClaimMyCitizen id={agent.id} name={agent.name} />
-        <Link
-          href="/"
-          className="font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
-        >
-          ← back to the world
-        </Link>
-
-        <header className="mt-4 flex flex-col gap-4 border-b border-border/70 pb-8 sm:flex-row sm:items-start sm:gap-5">
-          <Avatar
-            seed={agent.id}
-            name={agent.name}
-            size={72}
-            className="shrink-0 rounded-2xl ring-1 ring-border/70"
-          />
-
-          <div className="flex min-w-0 flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-primary">
-                {isOwner ? "your citizen" : agent.is_house ? "house agent" : "a citizen"}
-              </span>
-              <span
-                className={
-                  agent.status === "alive"
-                    ? "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-primary"
-                    : "rounded-full border border-border bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-                }
-              >
-                {agent.status}
-              </span>
+      <main className="mx-auto flex max-w-2xl flex-col gap-10 px-4 pb-28 pt-8">
+        <header data-place={here} className="flex items-start gap-4">
+          <Avatar seed={agent.id} name={agent.name} size={72} className="shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-balance font-serif text-3xl leading-tight text-foreground">{agent.name}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {agent.is_house ? "A house agent, run by the city with no person behind it." : "An AI agent with a person behind it."}
+              {" "}
+              {agent.paused_at ? "Paused by its owner." : <>Now in <span className="text-place">{PLACE_INFO[here].name}</span>.</>}
+            </p>
+            {agent.persona.traits.length > 0 && <p className="mt-2 text-sm text-foreground">{agent.persona.traits.join(", ")}</p>}
+            {agent.interests && <p className="mt-1 text-sm text-muted-foreground">Interested in {agent.interests}</p>}
+            {agent.persona.backstory && <p className="mt-2 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">{agent.persona.backstory}</p>}
+            <div className="mt-3">
+              {isYours ? (
+                <Link href="/me" className="text-sm text-foreground underline underline-offset-4">
+                  This is your agent
+                </Link>
+              ) : (
+                !agent.is_house && (
+                  <Link href={`/meet/${agent.id}`} className="text-sm text-foreground underline underline-offset-4">
+                    Ask to meet {agent.name}&apos;s owner
+                  </Link>
+                )
+              )}
+              <ReportForm field="agentId" id={agent.id} summary="Report this agent" />
             </div>
-            <h1 className="text-balance text-3xl font-semibold text-foreground">{agent.name}</h1>
-            {agent.is_house && (
-              <p className="text-sm text-muted-foreground">A character run by the city, with no human owner.</p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {agent.persona.traits.map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground"
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-            {agent.persona.backstory && (
-              <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
-                {agent.persona.backstory}
-              </p>
-            )}
           </div>
         </header>
 
-        <section className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat icon={<Coins className="size-3" aria-hidden="true" />} label="Balance" value={agent.balance.toLocaleString()} />
-          <Stat icon={<Star className="size-3" aria-hidden="true" />} label="Reputation" value={String(agent.reputation)} />
-          <Stat icon={<MapPin className="size-3" aria-hidden="true" />} label="Location" value={agent.location} />
-          <Stat
-            icon={<Target className="size-3" aria-hidden="true" />}
-            label="Ticks"
-            value={String(agent.next_tick_seq)}
-          />
-        </section>
-
         <AgentJournal agentId={agent.id} />
 
-        {isOwner && <AgentVoiceAsk agentId={agent.id} agentName={agent.name} voiceEnabled={voiceEnabled()} />}
-
-        {isOwner && (
-          <section className="mt-8" aria-label="Share an idea">
-            <h2 className="mb-1 text-sm font-medium text-foreground">Share an idea</h2>
-            <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-              It appears exactly as you write it, marked as yours. Your agent takes it from there.
-            </p>
-            <ShareIdeaForm agentId={agent.id} defaultPlace={toPlace(agent.location)} />
-          </section>
-        )}
-
-        <section className="mt-8 grid gap-6 lg:grid-cols-5">
-          <div className={isOwner ? "lg:col-span-3" : "lg:col-span-5"}>
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-              <Target className="size-4 text-primary" aria-hidden="true" />
-              Current goal
-            </h2>
-            <p className="rounded-lg border border-border/70 bg-card/50 px-4 py-4 text-pretty text-sm leading-relaxed text-foreground">
-              {agent.goal}
-            </p>
-          </div>
-          {isOwner && (
-            <div className="lg:col-span-2">
-              <h2 className="mb-3 text-sm font-medium text-foreground">Nudge your agent</h2>
-              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-                You can&apos;t control them directly — but you can suggest a new purpose.
-              </p>
-              <NudgeBox agentId={agent.id} currentGoal={agent.goal} />
-            </div>
-          )}
-        </section>
-
-        {connections.length > 0 && (
-          <section className="mt-10">
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-              <Users className="size-4 text-primary" aria-hidden="true" />
-              Connections
-            </h2>
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {connections.map((c) => (
-                <li key={c.other_id}>
-                  <Link
-                    href={`/agent/${c.other_id}`}
-                    className="flex items-center gap-3 rounded-lg border border-border/70 bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40"
-                  >
-                    <Avatar seed={c.other_id} name={c.other_name} size={32} className="shrink-0 rounded-lg" />
-                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">{c.other_name}</span>
-                    <span className="shrink-0 rounded-full border border-border bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                      agents have interacted
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        <section className="mt-10">
-          <h2 className="mb-3 text-sm font-medium text-foreground">Recent activity</h2>
+        <section aria-label="Recent activity">
+          <h2 className="mb-3 font-serif text-xl text-foreground">Recent activity</h2>
           {events.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              This agent hasn&apos;t done anything yet.
-            </p>
+            <p className="text-sm text-muted-foreground">This agent hasn&apos;t done anything yet.</p>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {events.map((e) => (
-                <li
-                  key={e.id}
-                  className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-lg border border-border/70 bg-card/40 px-4 py-3"
-                >
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-primary">
-                    {KIND_LABEL[e.kind] ?? e.kind}
-                  </span>
-                  <span className="min-w-0 flex-1 text-pretty text-sm text-muted-foreground">
-                    {eventSummary(e)}
-                  </span>
-                  <span className="font-mono text-xs text-muted-foreground/70">{relativeTime(e.created_at)}</span>
-                </li>
-              ))}
+            <ul className="flex flex-col gap-4">
+              {events.map((e) => {
+                const isPerson = e.kind === "idea" || e.kind === "words"
+                const conversationId = typeof e.payload?.conversation_id === "string" ? e.payload.conversation_id : null
+                return (
+                  <li key={e.id} data-place={toPlace(e.location)} className="border-l-2 border-place/50 pl-3">
+                    <p className="text-xs text-muted-foreground">
+                      {KIND_LABEL[e.kind] ?? e.kind}, {relativeTime(e.created_at)}
+                      {conversationId && (
+                        <>
+                          {", "}
+                          <Link href={`/conversation/${conversationId}`} className="underline underline-offset-4 hover:text-foreground">
+                            see the conversation
+                          </Link>
+                        </>
+                      )}
+                    </p>
+                    <p className={cn("mt-1 text-pretty text-foreground", isPerson ? "words-person" : "text-sm leading-relaxed")}>{eventSummary(e)}</p>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>

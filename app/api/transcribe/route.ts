@@ -10,6 +10,7 @@ import {
   TranscribeStreamingClient,
 } from "@aws-sdk/client-transcribe-streaming"
 import { AWS_REGION, voiceCredentials, voiceEnabled } from "@/lib/aws"
+import { memberRoute } from "@/lib/members"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 30
@@ -17,7 +18,7 @@ export const maxDuration = 30
 const SAMPLE_RATE = 16000
 const client = new TranscribeStreamingClient({ region: AWS_REGION, credentials: voiceCredentials() })
 
-export async function POST(req: Request) {
+export const POST = memberRoute(async (req) => {
   if (!voiceEnabled()) return NextResponse.json({ transcript: "" }, { status: 503 })
   try {
     const pcm = new Uint8Array(await req.arrayBuffer())
@@ -59,4 +60,4 @@ export async function POST(req: Request) {
     console.error("[polis] transcribe error:", err)
     return NextResponse.json({ transcript: "" })
   }
-}
+})

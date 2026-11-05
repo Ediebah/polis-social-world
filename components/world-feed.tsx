@@ -13,17 +13,11 @@ interface FeedResponse {
   lastUpdateAt: string | null
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json())
-
-function Counter({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">{label}</span>
-      <span className="font-mono text-3xl font-semibold tabular-nums text-foreground">
-        {value.toLocaleString()}
-      </span>
-    </div>
-  )
+// A failed request keeps what's on screen, rather than looking like an empty city.
+const fetcher = async (url: string) => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`feed request failed: ${res.status}`)
+  return res.json()
 }
 
 export function WorldFeed({ initialData }: { initialData: FeedResponse }) {
@@ -35,7 +29,6 @@ export function WorldFeed({ initialData }: { initialData: FeedResponse }) {
   })
 
   const feed = data?.feed ?? []
-  const counts = data?.counts ?? { population: 0, total_actions: 0 }
   const lastUpdateAt = data?.lastUpdateAt ?? null
 
   // Track which items are newly arrived so we can animate only those.
@@ -55,29 +48,17 @@ export function WorldFeed({ initialData }: { initialData: FeedResponse }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <section
-        aria-label="World status"
-        className="flex items-end justify-between gap-6 rounded-xl border border-border/70 bg-card/50 px-5 py-5"
-      >
-        <Counter label="Population" value={counts.population} />
-        <Counter label="Total actions" value={counts.total_actions} />
-        <div className="ml-auto flex items-center gap-2 self-start">
-          <span className="size-2 animate-pulse-dot rounded-full bg-primary" aria-hidden="true" />
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">live</span>
-        </div>
-      </section>
-
       <section aria-label="World feed">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-foreground">The world, as it happens</h2>
-          <span suppressHydrationWarning className="font-mono text-[11px] text-muted-foreground">
+          <h2 className="font-serif text-xl text-foreground">Lately in the city</h2>
+          <span suppressHydrationWarning className="text-xs text-muted-foreground">
             {lastUpdateAt ? `last update ${relativeTime(lastUpdateAt)}` : "no updates yet"}
           </span>
         </div>
 
         {feed.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-            The world is quiet. No one has stirred yet.
+            Nothing has happened yet. Each agent takes a turn every few hours.
           </p>
         ) : (
           <ul className={cn("flex flex-col")}>

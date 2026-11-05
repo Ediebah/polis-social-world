@@ -7,25 +7,14 @@ import type { FeedItem } from "@/lib/types"
 import { MapPin, MessagesSquare } from "lucide-react"
 import { Avatar } from "@/components/avatar"
 
-const KIND_STYLES: Record<string, string> = {
-  post: "text-primary border-primary/40 bg-primary/10",
-  move: "text-sky-300 border-sky-400/30 bg-sky-400/10",
-  listing: "text-emerald-300 border-emerald-400/30 bg-emerald-400/10",
-  trade: "text-amber-300 border-amber-400/30 bg-amber-400/10",
-  idea: "text-foreground border-primary/60 bg-primary/20",
-  words: "text-foreground border-primary/60 bg-primary/20",
-  open: "text-violet-300 border-violet-400/30 bg-violet-400/10",
-  question: "text-sky-300 border-sky-400/30 bg-sky-400/10",
-  challenge: "text-amber-300 border-amber-400/30 bg-amber-400/10",
-  connection: "text-emerald-300 border-emerald-400/30 bg-emerald-400/10",
-}
-
 export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
   const kindLabel = KIND_LABEL[item.kind] ?? item.kind
   const conversationId = typeof item.payload?.conversation_id === "string" ? item.payload.conversation_id : null
+  const isPerson = item.kind === "idea" || item.kind === "words"
 
   return (
     <li
+      data-place={item.location}
       className={cn(
         "group relative flex gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-border hover:bg-card/60",
         isNew && "animate-feed-enter",
@@ -39,29 +28,24 @@ export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <Link
             href={`/agent/${item.agent_id}`}
-            className="truncate font-medium text-foreground transition-colors hover:text-primary"
+            className="truncate font-medium text-foreground transition-colors hover:text-place"
           >
             {item.agent_name}
           </Link>
-          <span
-            className={cn(
-              "rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-              KIND_STYLES[item.kind] ?? "text-muted-foreground border-border bg-secondary",
-            )}
-          >
-            {kindLabel}
-          </span>
-          <span suppressHydrationWarning className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+          <span className="text-xs text-place">{kindLabel}</span>
+          <span suppressHydrationWarning className="ml-auto shrink-0 text-xs text-muted-foreground">
             {relativeTime(item.created_at)}
           </span>
         </div>
 
-        <p className="mt-1 text-pretty text-sm leading-relaxed text-muted-foreground">{eventSummary(item)}</p>
+        <p className={cn("mt-1 text-pretty", isPerson ? "words-person text-foreground" : "text-sm leading-relaxed text-muted-foreground")}>
+          {eventSummary(item)}
+        </p>
 
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <Link
             href={`/agent/${item.agent_id}`}
-            className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground/70 transition-colors hover:text-primary"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             <MapPin className="size-3" aria-hidden="true" />
             {item.location}
@@ -69,7 +53,7 @@ export function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
           {conversationId && (
             <Link
               href={`/conversation/${conversationId}`}
-              className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground/70 transition-colors hover:text-primary"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <MessagesSquare className="size-3" aria-hidden="true" />
               see the conversation

@@ -71,7 +71,7 @@ export function CitizenSearch() {
               >
                 <Avatar seed={r.id} name={r.name} size={28} className="shrink-0 rounded-md" />
                 <span className="min-w-0 flex-1 truncate text-sm text-foreground">{r.name}</span>
-                <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="shrink-0 text-xs capitalize text-muted-foreground">
                   {r.location}
                 </span>
               </button>

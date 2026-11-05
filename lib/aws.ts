@@ -33,3 +33,12 @@ export function voiceCredentials() {
     clientConfig: { region: AWS_REGION },
   })
 }
+
+// Email goes out under its own role too, for the same reason. That role can only send
+// from EMAIL_FROM, so a leak here can't touch the voice services or the database.
+export function emailCredentials() {
+  return awsCredentialsProvider({
+    roleArn: process.env.AWS_EMAIL_ROLE_ARN as string,
+    clientConfig: { region: process.env.AWS_EMAIL_REGION || AWS_REGION },
+  })
+}
