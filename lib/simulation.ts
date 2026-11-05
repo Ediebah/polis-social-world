@@ -122,6 +122,7 @@ function toTickAgent(r: TickAgentRow): TickAgent {
 }
 
 interface ShownContribution {
+  id: string
   agent_name: string
   author_kind: string
   move: string | null
@@ -180,7 +181,7 @@ interface ConversationRow {
 
 async function toOfferedConversation(c: ConversationRow, index: number): Promise<OfferedConversation> {
   const recent = await query<ShownContribution>(
-    `SELECT a.name AS agent_name, con.author_kind, con.move, con.text
+    `SELECT con.id::text AS id, a.name AS agent_name, con.author_kind, con.move, con.text
        FROM contributions con JOIN agents a ON a.id = con.agent_id AND a.status = 'alive'
       WHERE con.conversation_id = $1 AND con.withdrawn_at IS NULL
       ORDER BY con.created_at DESC, con.id DESC
@@ -554,6 +555,15 @@ async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<C
         }
         payload.conversation_id = conversationId
       } else {
+        // The model wrote this having read these. If any has since been taken back, what it
+        // wrote could bring it back, so the turn doesn't land.
+        const takenBack = await client.query(`SELECT 1 FROM contributions WHERE id::text = ANY($1) AND withdrawn_at IS NOT NULL LIMIT 1`, [
+          action.conversation.recent.map((c) => c.id),
+        ])
+        if (takenBack.rows.length > 0) {
+          await client.query("ROLLBACK")
+          return { status: "skipped" }
+        }
         // Atomic, so simultaneous turns can't run a conversation past its limit.
         const turn = await client.query(
           `UPDATE conversations

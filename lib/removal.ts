@@ -25,13 +25,17 @@ function forgetJournals(client: ClientBase, agentIds: string[], now: string) {
 
 async function blankContributions(client: ClientBase, ids: string[], now: string): Promise<void> {
   if (ids.length === 0) return
-  const authors = await client.query<{ agent_id: string }>(
-    `UPDATE contributions SET text = '', withdrawn_at = $1 WHERE id::text = ANY($2) RETURNING agent_id::text AS agent_id`,
+  const blanked = await client.query<{ agent_id: string; conversation_id: string }>(
+    `UPDATE contributions SET text = '', withdrawn_at = $1 WHERE id::text = ANY($2)
+     RETURNING agent_id::text AS agent_id, conversation_id::text AS conversation_id`,
     [now, ids],
   )
   await client.query(`DELETE FROM world_events WHERE ref_id::text = ANY($1)`, [ids])
+  // A write to the row every agent turn there also writes, so a turn at this same moment
+  // conflicts with this. Whichever goes second then sees what the other did.
+  await client.query(`UPDATE conversations SET updated_at = updated_at WHERE id::text = ANY($1)`, [blanked.rows.map((r) => r.conversation_id)])
   // A saved journal is written from what its agent said, so it could repeat any of this.
-  await forgetJournals(client, authors.rows.map((r) => r.agent_id), now)
+  await forgetJournals(client, blanked.rows.map((r) => r.agent_id), now)
 }
 
 async function deleteTakeaways(client: ClientBase, ids: string[], now: string): Promise<void> {
@@ -67,38 +71,72 @@ async function removeIdeaText(client: ClientBase, ideaId: string, now: string): 
 
 const wordsOf = (text: string) => text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
 
-// Every run of QUOTED_WORDS words, or the whole text if it's shorter than that.
-function quotable(text: string): string[] {
-  const words = wordsOf(text)
-  if (words.join(" ").length < MIN_QUOTE) return []
-  const size = Math.min(QUOTED_WORDS, words.length)
-  return Array.from({ length: words.length - size + 1 }, (_, i) => ` ${words.slice(i, i + size).join(" ")} `)
+// Text being taken back, and where it could have been read from.
+interface TakenBack {
+  text: string
+  created_at: string
+  conversation_id: string | null
+}
+
+interface AgentText {
+  id: string
+  text: string
+  conversation_id: string
+  created_at: string
+}
+
+// People choose what they write, and withdrawing shouldn't let them erase anyone else's
+// agent. So nothing older than the text can count, since it can't be quoting it. A sentence
+// counts anywhere, while something shorter could be a common phrase and only counts in the
+// room it was said in, in full.
+function quotesAny(taken: TakenBack[]): (row: AgentText) => boolean {
+  const checks = taken.map(({ text, created_at, conversation_id }) => {
+    const words = wordsOf(text)
+    const isSentence = words.length >= QUOTED_WORDS
+    return {
+      after: new Date(created_at).getTime(),
+      room: isSentence ? null : conversation_id,
+      phrases: isSentence
+        ? Array.from({ length: words.length - QUOTED_WORDS + 1 }, (_, i) => ` ${words.slice(i, i + QUOTED_WORDS).join(" ")} `)
+        : words.join(" ").length >= MIN_QUOTE
+          ? [` ${words.join(" ")} `]
+          : [],
+    }
+  })
+  return (row) => {
+    const said = ` ${wordsOf(row.text).join(" ")} `
+    const at = new Date(row.created_at).getTime()
+    return checks.some(
+      (check) => at > check.after && (check.room === null || check.room === row.conversation_id) && check.phrases.some((phrase) => said.includes(phrase)),
+    )
+  }
 }
 
 // Agents are told never to repeat people, which won't always hold, and they can do it in any
 // room. Rewording can't be detected, which is why the pages offering this say so.
-async function removeQuotes(client: ClientBase, texts: string[], now: string): Promise<void> {
-  const phrases = texts.flatMap(quotable)
-  if (phrases.length === 0) return
-  const quotes = (text: string) => {
-    const said = ` ${wordsOf(text).join(" ")} `
-    return phrases.some((phrase) => said.includes(phrase))
-  }
-  const replies = await client.query<{ id: string; text: string }>(
-    `SELECT id::text AS id, text FROM contributions WHERE author_kind = 'agent' AND withdrawn_at IS NULL`,
+async function removeQuotes(client: ClientBase, taken: TakenBack[], now: string): Promise<void> {
+  const quotes = quotesAny(taken)
+  const replies = await client.query<AgentText>(
+    `SELECT id::text AS id, text, conversation_id::text AS conversation_id, created_at FROM contributions
+      WHERE author_kind = 'agent' AND withdrawn_at IS NULL`,
   )
-  await blankContributions(client, replies.rows.filter((r) => quotes(r.text)).map((r) => r.id), now)
-  const takeaways = await client.query<{ id: string; text: string }>(`SELECT id::text AS id, text FROM memories`)
-  await deleteTakeaways(client, takeaways.rows.filter((r) => quotes(r.text)).map((r) => r.id), now)
+  await blankContributions(client, replies.rows.filter(quotes).map((r) => r.id), now)
+  const takeaways = await client.query<AgentText>(
+    `SELECT id::text AS id, text, conversation_id::text AS conversation_id, created_at FROM memories`,
+  )
+  await deleteTakeaways(client, takeaways.rows.filter(quotes).map((r) => r.id), now)
 }
+
+const IDEA_TEXT = "text, created_at, NULL::text AS conversation_id"
+const CONTRIBUTION_TEXT = "text, created_at, conversation_id::text AS conversation_id"
 
 export function withdrawIdea(agentId: string, ideaId: string): Promise<boolean> {
   if (!UUID_RE.test(ideaId)) return Promise.resolve(false)
   return inOneTransaction(async (client, now) => {
-    const idea = await client.query<{ text: string }>(`SELECT text FROM ideas WHERE id = $1 AND agent_id = $2 AND withdrawn_at IS NULL`, [ideaId, agentId])
+    const idea = await client.query<TakenBack>(`SELECT ${IDEA_TEXT} FROM ideas WHERE id = $1 AND agent_id = $2 AND withdrawn_at IS NULL`, [ideaId, agentId])
     if (idea.rows.length === 0) return false
     await removeIdeaText(client, ideaId, now)
-    await removeQuotes(client, [idea.rows[0].text], now)
+    await removeQuotes(client, idea.rows, now)
     return true
   })
 }
@@ -106,14 +144,14 @@ export function withdrawIdea(agentId: string, ideaId: string): Promise<boolean> 
 export function withdrawWords(agentId: string, contributionId: string): Promise<boolean> {
   if (!UUID_RE.test(contributionId)) return Promise.resolve(false)
   return inOneTransaction(async (client, now) => {
-    const { rows } = await client.query<{ text: string }>(
-      `SELECT text FROM contributions
+    const { rows } = await client.query<TakenBack>(
+      `SELECT ${CONTRIBUTION_TEXT} FROM contributions
         WHERE id = $1 AND agent_id = $2 AND author_kind = 'owner' AND withdrawn_at IS NULL`,
       [contributionId, agentId],
     )
     if (rows.length === 0) return false
     await blankContributions(client, [contributionId], now)
-    await removeQuotes(client, [rows[0].text], now)
+    await removeQuotes(client, rows, now)
     return true
   })
 }
@@ -122,13 +160,13 @@ export function withdrawWords(agentId: string, contributionId: string): Promise<
 export function removeContribution(contributionId: string): Promise<boolean> {
   if (!UUID_RE.test(contributionId)) return Promise.resolve(false)
   return inOneTransaction(async (client, now) => {
-    const { rows } = await client.query<{ author_kind: string; text: string }>(
-      `SELECT author_kind, text FROM contributions WHERE id = $1 AND withdrawn_at IS NULL`,
+    const { rows } = await client.query<TakenBack & { author_kind: string }>(
+      `SELECT author_kind, ${CONTRIBUTION_TEXT} FROM contributions WHERE id = $1 AND withdrawn_at IS NULL`,
       [contributionId],
     )
     if (rows.length === 0) return false
     await blankContributions(client, [contributionId], now)
-    if (rows[0].author_kind === "owner") await removeQuotes(client, [rows[0].text], now)
+    if (rows[0].author_kind === "owner") await removeQuotes(client, rows, now)
     return true
   })
 }
@@ -137,10 +175,10 @@ export function removeContribution(contributionId: string): Promise<boolean> {
 export function removeIdea(ideaId: string): Promise<boolean> {
   if (!UUID_RE.test(ideaId)) return Promise.resolve(false)
   return inOneTransaction(async (client, now) => {
-    const idea = await client.query<{ text: string }>(`SELECT text FROM ideas WHERE id = $1 AND withdrawn_at IS NULL`, [ideaId])
+    const idea = await client.query<TakenBack>(`SELECT ${IDEA_TEXT} FROM ideas WHERE id = $1 AND withdrawn_at IS NULL`, [ideaId])
     if (idea.rows.length === 0) return false
     await removeIdeaText(client, ideaId, now)
-    await removeQuotes(client, [idea.rows[0].text], now)
+    await removeQuotes(client, idea.rows, now)
     return true
   })
 }
@@ -157,18 +195,18 @@ export function deleteAccount(agentId: string): Promise<boolean> {
     )
     if (agent.rows.length === 0) return false
 
-    const ideas = await client.query<{ id: string; text: string }>(
-      `SELECT id::text AS id, text FROM ideas WHERE agent_id = $1 AND withdrawn_at IS NULL`,
+    const ideas = await client.query<TakenBack & { id: string }>(
+      `SELECT id::text AS id, ${IDEA_TEXT} FROM ideas WHERE agent_id = $1 AND withdrawn_at IS NULL`,
       [agentId],
     )
     for (const { id } of ideas.rows) await removeIdeaText(client, id, now)
 
-    const said = await client.query<{ id: string; text: string }>(
-      `SELECT id::text AS id, text FROM contributions WHERE agent_id = $1 AND withdrawn_at IS NULL`,
+    const said = await client.query<TakenBack & { id: string }>(
+      `SELECT id::text AS id, ${CONTRIBUTION_TEXT} FROM contributions WHERE agent_id = $1 AND withdrawn_at IS NULL`,
       [agentId],
     )
     await blankContributions(client, said.rows.map((c) => c.id), now)
-    await removeQuotes(client, [...ideas.rows.map((i) => i.text), ...said.rows.map((c) => c.text)], now)
+    await removeQuotes(client, [...ideas.rows, ...said.rows], now)
 
     const kept = await client.query<{ id: string }>(`SELECT id::text AS id FROM memories WHERE agent_id = $1`, [agentId])
     await deleteTakeaways(client, kept.rows.map((r) => r.id), now)

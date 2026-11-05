@@ -52,28 +52,36 @@ const house = (name: string, location = "commons") =>
   })
 
 // What an agent saying something leaves behind, written directly so each test controls it.
+// A second later each time, so what came first is never in doubt.
+function tick(): string {
+  vi.setSystemTime(Date.now() + 1000)
+  return new Date().toISOString()
+}
+
 async function agentSays(agentId: string, conversationId: string, text: string, memoryId: string | null = null) {
   const id = crypto.randomUUID()
+  const at = tick()
   await query(
     `INSERT INTO contributions (id, conversation_id, agent_id, author_kind, move, text, memory_id, guided, created_at)
-     VALUES ($1, $2, $3, 'agent', 'challenge', $4, $5, FALSE, now())`,
-    [id, conversationId, agentId, text, memoryId],
+     VALUES ($1, $2, $3, 'agent', 'challenge', $4, $5, FALSE, $6)`,
+    [id, conversationId, agentId, text, memoryId, at],
   )
   await query(
     `INSERT INTO world_events (id, agent_id, kind, payload, location, ref_id, created_at)
-     VALUES ($1, $2, 'challenge', $3::jsonb, 'commons', $4, now())`,
-    [crypto.randomUUID(), agentId, JSON.stringify({ text, conversation_id: conversationId }), id],
+     VALUES ($1, $2, 'challenge', $3::jsonb, 'commons', $4, $5)`,
+    [crypto.randomUUID(), agentId, JSON.stringify({ text, conversation_id: conversationId }), id, at],
   )
   return id
 }
 
 async function takeaway(agentId: string, conversationId: string, text: string) {
   const id = crypto.randomUUID()
-  await query(`INSERT INTO memories (id, agent_id, conversation_id, text, created_at) VALUES ($1, $2, $3, $4, now())`, [
+  await query(`INSERT INTO memories (id, agent_id, conversation_id, text, created_at) VALUES ($1, $2, $3, $4, $5)`, [
     id,
     agentId,
     conversationId,
     text,
+    tick(),
   ])
   return id
 }
@@ -184,6 +192,19 @@ describe("withdrawing an idea", () => {
 
     expect(await everything()).not.toContain("zebra-striped-tools")
     expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === other)?.text).toBe("An unrelated thought about libraries.")
+  })
+
+  it("can't be used to erase what an agent already said in another room", async () => {
+    const mira = await house("Mira")
+    const elsewhere = await question()
+    const sentence = "Nobody has asked who repairs the tools once they break, which matters most."
+    const earlier = await agentSays(mira.id, elsewhere, sentence)
+    tick()
+    const ada = await member("Ada", sentence)
+
+    await withdrawIdea(ada.id, await ideaIdOf(ada.conversationId))
+
+    expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === earlier)?.text).toBe(sentence)
   })
 
   it("makes agents who took part write a new journal", async () => {
@@ -357,16 +378,57 @@ describe("withdrawing your own words", () => {
     expect(after?.contributions.find((c) => c.id === brief)?.text).toBe("Shipped before Friday? Then what?")
   })
 
-  it("finds quotes of them in other rooms too", async () => {
-    const { bea, wordsId } = await room()
+  it("finds a sentence of them quoted in other rooms too", async () => {
+    const ada = await member("Ada")
+    const bea = await member("Bea")
     const mira = await house("Mira")
     const elsewhere = await question()
-    await agentSays(mira.id, elsewhere, `Someone wrote: ${WORDS}`)
-    await takeaway(mira.id, elsewhere, `Remember: ${WORDS}`)
+    const long = "My own long quokka-coloured thought about this whole business of lending."
+    const { id } = await addOwnerWords(bea.id, ada.conversationId, long)
+    await agentSays(mira.id, elsewhere, `Someone wrote: ${long}`)
+    await takeaway(mira.id, elsewhere, `Remember: ${long}`)
 
-    await withdrawWords(bea.id, wordsId)
+    await withdrawWords(bea.id, id)
 
     expect(await everything()).not.toContain("quokka-coloured")
+  })
+
+  it("leaves other rooms alone when what was withdrawn is too short to be a sentence", async () => {
+    const ada = await member("Ada")
+    const bea = await member("Bea")
+    const mira = await house("Mira")
+    const elsewhere = await question()
+    const { id } = await addOwnerWords(bea.id, ada.conversationId, "What would it take?")
+    const here = await agentSays(mira.id, ada.conversationId, "What would it take? Bea seems to be asking that.")
+    const there = await agentSays(mira.id, elsewhere, "What would it take to run this every week?")
+    const kept = await takeaway(mira.id, elsewhere, "What would it take to keep going?")
+
+    await withdrawWords(bea.id, id)
+
+    expect((await getConversation(ada.conversationId))?.contributions.find((c) => c.id === here)?.text).toBe("")
+    expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === there)?.text).toBe("What would it take to run this every week?")
+    const { rows } = await query(`SELECT 1 FROM memories WHERE id = $1`, [kept])
+    expect(rows).toHaveLength(1)
+  })
+
+  it("can't be used to erase what an agent already said, by copying it and withdrawing", async () => {
+    const ada = await member("Ada")
+    const bea = await member("Bea")
+    const mira = await house("Mira")
+    const sentence = "Nobody has asked who repairs the tools once they break, which matters most."
+    const elsewhere = await question()
+    const earlier = await agentSays(mira.id, elsewhere, sentence)
+    const earlierHere = await agentSays(mira.id, ada.conversationId, sentence)
+    const remembered = await takeaway(mira.id, elsewhere, sentence)
+    tick()
+    const { id } = await addOwnerWords(bea.id, ada.conversationId, sentence)
+
+    await withdrawWords(bea.id, id)
+
+    expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === earlier)?.text).toBe(sentence)
+    expect((await getConversation(ada.conversationId))?.contributions.find((c) => c.id === earlierHere)?.text).toBe(sentence)
+    const { rows } = await query(`SELECT 1 FROM memories WHERE id = $1`, [remembered])
+    expect(rows).toHaveLength(1)
   })
 
   it("doesn't treat a very short message as a quote", async () => {
@@ -481,10 +543,11 @@ describe("deleting an account", () => {
     const bea = await member("Bea")
     const mira = await house("Mira")
     const elsewhere = await question()
-    await addOwnerWords(ada.id, bea.conversationId, WORDS)
+    const long = "My own long quokka-coloured thought about this whole business of lending."
+    await addOwnerWords(ada.id, bea.conversationId, long)
     await agentSays(ada.id, bea.conversationId, "Her agent said something about a very specific capybara parade today.")
     await agentSays(mira.id, elsewhere, `Quoting the idea: ${IDEA}`)
-    await agentSays(mira.id, elsewhere, `Quoting the words: ${WORDS}`)
+    await agentSays(mira.id, elsewhere, `Quoting the words: ${long}`)
     await agentSays(mira.id, elsewhere, `Quoting the agent: something about a very specific capybara parade today.`)
     const unrelated = await agentSays(mira.id, elsewhere, "An unrelated thought.")
 
@@ -813,6 +876,74 @@ describe("a turn that's already under way", () => {
     expect(await said(ada.id)).toBe(0)
     const { rows } = await query(`SELECT count(*)::int AS n FROM memories WHERE agent_id = $1`, [ada.id])
     expect(rows[0].n).toBe(0)
+  })
+
+  describe("in a room where someone withdraws words the model is reading", () => {
+    const ADD_QUOTING = (text: string) =>
+      JSON.stringify({ type: "add", text: `You wrote: ${text}`, to: null, idea_ref: null, conversation_ref: "C1", kind: "question", takeaway: null, memory_ref: null })
+
+    async function roomWithWords() {
+      const ada = await member("Ada")
+      const bea = await member("Bea")
+      const mira = await house("Mira")
+      const { id } = await addOwnerWords(bea.id, ada.conversationId, WORDS)
+      return { ada, bea, mira, wordsId: id }
+    }
+
+    it("doesn't land, so it can't bring them back", async () => {
+      const { ada, bea, mira, wordsId } = await roomWithWords()
+      onModelCall(async () => {
+        await withdrawWords(bea.id, wordsId)
+        return textResult(ADD_QUOTING(WORDS))
+      })
+
+      await expect(welcomeReply(ada.conversationId)).resolves.toBe(false)
+
+      expect(await everything()).not.toContain("quokka-coloured")
+      expect(await said(mira.id)).toBe(0)
+      expect((await getConversation(ada.conversationId))?.status).toBe("open")
+    })
+
+    it("doesn't land if the founder removed them either", async () => {
+      const { ada, mira, wordsId } = await roomWithWords()
+      onModelCall(async () => {
+        await removeContribution(wordsId)
+        return textResult(ADD_QUOTING(WORDS))
+      })
+
+      await welcomeReply(ada.conversationId)
+
+      expect(await said(mira.id)).toBe(0)
+    })
+
+    it("lands when the words are still there", async () => {
+      const { ada, mira } = await roomWithWords()
+      onModelCall(async () => textResult(ADD_QUOTING("Something else.")))
+
+      await expect(welcomeReply(ada.conversationId)).resolves.toBe(true)
+
+      expect(await said(mira.id)).toBe(1)
+    })
+
+    it("writes to the conversation when withdrawing, so a simultaneous turn conflicts with it", async () => {
+      const { bea, wordsId } = await roomWithWords()
+      failNext(/UPDATE conversations SET updated_at = updated_at/, "XX000")
+
+      await expect(withdrawWords(bea.id, wordsId)).rejects.toMatchObject({ code: "XX000" })
+
+      expect(await everything()).toContain("quokka-coloured")
+    })
+
+    it("doesn't move the room up the lists", async () => {
+      const { ada, bea, wordsId } = await roomWithWords()
+      const before = (await query(`SELECT updated_at FROM conversations WHERE id = $1`, [ada.conversationId])).rows[0].updated_at
+      tick()
+
+      await withdrawWords(bea.id, wordsId)
+
+      const after = (await query(`SELECT updated_at FROM conversations WHERE id = $1`, [ada.conversationId])).rows[0].updated_at
+      expect(after).toEqual(before)
+    })
   })
 
   it("doesn't open a conversation on an idea withdrawn while the model is thinking", async () => {
