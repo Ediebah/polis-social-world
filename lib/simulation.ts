@@ -156,6 +156,8 @@ interface Offers {
   ideas: OfferedIdea[]
   questions: { ref: string; text: string }[]
   memories: { ref: string; id: string; text: string; conversationId: string }[]
+  history: { id: string; move: string | null; text: string }[]
+  relationships: string[]
   // Which offered conversation the owner pointed this agent at, if any.
   guide: { ref: string; move: GuideMove } | null
 }
@@ -207,7 +209,7 @@ async function toOfferedConversation(c: ConversationRow, index: number): Promise
 // Everything this agent may act on this turn. The model answers with these short refs,
 // and the server only accepts a ref it handed out, so it can't invent a target.
 async function buildOffers(agent: TickAgent): Promise<Offers> {
-  const [guided, conversations, ideas, open, memories] = await Promise.all([
+  const [guided, conversations, ideas, open, memories, past] = await Promise.all([
     // Reaches the agent wherever it is, but not if it would be replying to itself.
     agent.guide
       ? query<ConversationRow>(
@@ -252,6 +254,7 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
         ORDER BY m.created_at DESC LIMIT $2`,
       [agent.id, MEMORIES_SHOWN],
     ),
+    gatherHistory(agent),
   ])
 
   const guidedRow = guided.rows[0]
@@ -279,14 +282,15 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
     })),
     questions: questions.map((text, i) => ({ ref: `Q${i + 1}`, text })),
     memories: memories.rows.map((m, i) => ({ ref: `M${i + 1}`, id: m.id, text: m.text, conversationId: m.conversation_id })),
+    ...past,
     guide: guidedRow && agent.guide ? { ref: "C1", move: agent.guide.move } : null,
   }
 }
 
 async function gatherHistory(agent: TickAgent) {
   const [history, relationships] = await Promise.all([
-    query<{ move: string | null; text: string }>(
-      `SELECT con.move, con.text FROM contributions con
+    query<{ id: string; move: string | null; text: string }>(
+      `SELECT con.id::text AS id, con.move, con.text FROM contributions con
         WHERE con.agent_id = $1 AND con.author_kind = 'agent' AND con.withdrawn_at IS NULL
           AND NOT ${inHiddenRoom("con.conversation_id")}
         ORDER BY con.created_at DESC LIMIT $2`,
@@ -348,7 +352,7 @@ const SYSTEM_PROMPT = [
 ].join("\n")
 
 async function decideAction(agent: TickAgent, offers: Offers): Promise<AgentAction> {
-  const { history, relationships } = await gatherHistory(agent)
+  const { history, relationships } = offers
   const here = PLACE_INFO[agent.place]
   const profile = [
     `Traits: ${agent.persona.traits.join(", ") || "unspecified"}.`,
@@ -521,7 +525,7 @@ async function readSomethingTakenBack(client: ClientBase, offers: Offers): Promi
             (SELECT count(*)::int FROM ideas WHERE id::text = ANY($2) AND withdrawn_at IS NOT NULL) AS ideas,
             (SELECT count(*)::int FROM memories WHERE id::text = ANY($3)) AS memories`,
     [
-      offers.conversations.flatMap((c) => c.recent.map((r) => r.id)),
+      [...offers.conversations.flatMap((c) => c.recent.map((r) => r.id)), ...offers.history.map((h) => h.id)],
       [...offers.ideas.map((i) => i.id), ...offers.conversations.flatMap((c) => (c.ideaId ? [c.ideaId] : []))],
       memoryIds,
     ],
@@ -680,6 +684,7 @@ export async function welcomeReply(conversationId: string): Promise<boolean> {
     ideas: [],
     questions: [],
     memories: [],
+    ...(await gatherHistory(agent)),
     guide: null,
   }
   try {

@@ -1027,6 +1027,37 @@ describe("a turn that's already under way", () => {
         expect(await said(mira.id)).toBe(0)
       })
 
+      // In a room that's closed, so it reaches the model only as the agent's own history.
+      async function saidEarlier(agentId: string) {
+        const closed = await question()
+        await query(`UPDATE conversations SET status = 'closed' WHERE id = $1`, [closed])
+        return agentSays(agentId, closed, "Something it said earlier.")
+      }
+
+      it("doesn't land after something it said itself, and was reminded of, is removed", async () => {
+        const { mira } = await twoRooms()
+        const earlier = await saidEarlier(mira.id)
+        onModelCall(async () => {
+          await removeContribution(earlier)
+          return reply("C2")
+        })
+
+        await runScheduledSlot()
+
+        expect(prompts()).toContain("Something it said earlier.")
+        expect(await said(mira.id)).toBe(1)
+      })
+
+      it("reminds a house agent what it said when it's welcoming someone too", async () => {
+        const { ada, mira } = await twoRooms()
+        await saidEarlier(mira.id)
+        onModelCall(async () => reply("C1"))
+
+        await welcomeReply(ada.conversationId)
+
+        expect(prompts()).toContain("Something it said earlier.")
+      })
+
       it("doesn't open a conversation either", async () => {
         const { ada, bea, mira, wordsId } = await twoRooms()
         vi.setSystemTime(Date.now() + 60_000)
