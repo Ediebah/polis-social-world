@@ -2,7 +2,7 @@ import type { ClientBase } from "pg"
 import { query, transaction } from "./db"
 import { retryOnConflict } from "./occ"
 import { isPlace, toPlace, type Place } from "./places"
-import { bumpCounter, OWNER_POST_COOLDOWN_MS, UUID_RE } from "./queries"
+import { bumpCounter, inHiddenRoom, OWNER_POST_COOLDOWN_MS, UUID_RE } from "./queries"
 import type { ContributionView, ConversationView } from "./types"
 
 export const MAX_OWNER_TEXT = 1000
@@ -98,7 +98,7 @@ export async function addOwnerWords(agentId: string, conversationId: string, raw
     transaction(async (client) => {
       const now = new Date()
       const conversation = await client.query<{ place: string }>(
-        `SELECT place FROM conversations WHERE id = $1 AND status = 'open'`,
+        `SELECT c.place FROM conversations c WHERE c.id = $1 AND c.status = 'open' AND NOT ${inHiddenRoom("c.id")}`,
         [conversationId],
       )
       if (conversation.rows.length === 0) throw new OwnerWordsError("closed")
@@ -262,6 +262,10 @@ export interface ConversationSummary {
   updatedAt: string
 }
 
+// A question has no idea. An idea stops being shown once it's withdrawn or its owner is
+// suspended. Expects the idea joined as i and its owner as ia.
+export const IDEA_IS_VISIBLE = `(i.id IS NULL OR (i.withdrawn_at IS NULL AND ia.status = 'alive'))`
+
 const SUMMARY_COLUMNS = `c.id::text AS id, c.place, c.question, c.status, c.updated_at, i.text AS idea_text,
   ia.id::text AS idea_agent_id, ia.name AS idea_agent_name`
 const SUMMARY_JOINS = `LEFT JOIN ideas i ON i.id = c.idea_id LEFT JOIN agents ia ON ia.id = i.agent_id`
@@ -283,8 +287,8 @@ async function summarize(rows: SummaryRow[]): Promise<ConversationSummary[]> {
   if (rows.length === 0) return []
   const said = await query<{ conversation_id: string; agent_id: string; name: string; n: number }>(
     `SELECT con.conversation_id::text AS conversation_id, con.agent_id::text AS agent_id, a.name, count(*)::int AS n
-       FROM contributions con JOIN agents a ON a.id = con.agent_id
-      WHERE con.conversation_id::text = ANY($1)
+       FROM contributions con JOIN agents a ON a.id = con.agent_id AND a.status = 'alive'
+      WHERE con.conversation_id::text = ANY($1) AND con.withdrawn_at IS NULL
       GROUP BY con.conversation_id, con.agent_id, a.name`,
     [rows.map((r) => r.id)],
   )
@@ -307,7 +311,7 @@ async function summarize(rows: SummaryRow[]): Promise<ConversationSummary[]> {
 export async function listOpenConversations(limit = 30): Promise<ConversationSummary[]> {
   const { rows } = await query<SummaryRow>(
     `SELECT ${SUMMARY_COLUMNS} FROM conversations c ${SUMMARY_JOINS}
-      WHERE c.status = 'open' ORDER BY c.updated_at DESC LIMIT $1`,
+      WHERE c.status = 'open' AND ${IDEA_IS_VISIBLE} ORDER BY c.updated_at DESC LIMIT $1`,
     [limit],
   )
   return summarize(rows)
@@ -316,15 +320,22 @@ export async function listOpenConversations(limit = 30): Promise<ConversationSum
 export async function getFollowedConversations(agentId: string, limit = 30): Promise<ConversationSummary[]> {
   const { rows } = await query<SummaryRow>(
     `SELECT ${SUMMARY_COLUMNS} FROM follows f JOIN conversations c ON c.id = f.conversation_id ${SUMMARY_JOINS}
-      WHERE f.agent_id = $1 ORDER BY c.updated_at DESC LIMIT $2`,
+      WHERE f.agent_id = $1 AND ${IDEA_IS_VISIBLE} ORDER BY c.updated_at DESC LIMIT $2`,
     [agentId, limit],
   )
   return summarize(rows)
 }
 
 export async function getOwnIdeas(agentId: string, limit = 20) {
-  const { rows } = await query<{ id: string; text: string; place: string; created_at: string; conversation_id: string | null }>(
-    `SELECT i.id::text AS id, i.text, i.place, i.created_at, c.id::text AS conversation_id
+  const { rows } = await query<{
+    id: string
+    text: string
+    place: string
+    created_at: string
+    withdrawn_at: string | null
+    conversation_id: string | null
+  }>(
+    `SELECT i.id::text AS id, i.text, i.place, i.created_at, i.withdrawn_at, c.id::text AS conversation_id
        FROM ideas i LEFT JOIN conversations c ON c.idea_id = i.id
       WHERE i.agent_id = $1 ORDER BY i.created_at DESC LIMIT $2`,
     [agentId, limit],
@@ -343,10 +354,14 @@ export async function getAgentsMet(agentId: string, limit = 30) {
   return rows
 }
 
+// A suspension can be lifted, so what a suspended citizen wrote is hidden as it's read rather
+// than blanked. Expects the citizen joined as a.
+const SHOWN = (column: string, otherwise: string) => `CASE WHEN a.status = 'suspended' THEN ${otherwise} ELSE ${column} END`
+
 export async function getConversation(id: string): Promise<ConversationView | null> {
   if (!UUID_RE.test(id)) return null
   const { rows } = await query<Omit<ConversationView, "idea" | "contributions"> & { idea_id: string | null }>(
-    `SELECT c.id, c.idea_id, c.place, c.question, c.status, c.created_at, c.opened_by, a.name AS opened_by_name
+    `SELECT c.id, c.idea_id, c.place, c.question, c.status, c.created_at, c.opened_by, ${SHOWN("a.name", "'Suspended citizen'")} AS opened_by_name
        FROM conversations c LEFT JOIN agents a ON a.id = c.opened_by
       WHERE c.id = $1`,
     [id],
@@ -357,15 +372,17 @@ export async function getConversation(id: string): Promise<ConversationView | nu
   const [idea, contributions] = await Promise.all([
     idea_id
       ? query<NonNullable<ConversationView["idea"]>>(
-          `SELECT i.id, i.text, i.agent_id, a.name AS agent_name
+          `SELECT i.id, ${SHOWN("i.text", "''")} AS text, i.agent_id, ${SHOWN("a.name", "'Suspended citizen'")} AS agent_name
              FROM ideas i JOIN agents a ON a.id = i.agent_id
             WHERE i.id = $1`,
           [idea_id],
         )
       : null,
     query<ContributionView>(
-      `SELECT con.id, con.agent_id, a.name AS agent_name, a.is_house, con.author_kind, con.move, con.guided, con.text,
-              con.created_at, m.conversation_id AS remembered_from, m.text AS remembered_text
+      `SELECT con.id, con.agent_id, ${SHOWN("a.name", "'Suspended citizen'")} AS agent_name, a.is_house, con.author_kind, con.move, con.guided,
+              ${SHOWN("con.text", "''")} AS text, con.created_at,
+              CASE WHEN ${inHiddenRoom("m.conversation_id")} THEN NULL ELSE ${SHOWN("m.conversation_id", "NULL")} END AS remembered_from,
+              CASE WHEN ${inHiddenRoom("m.conversation_id")} THEN NULL ELSE ${SHOWN("m.text", "NULL")} END AS remembered_text
          FROM contributions con
          JOIN agents a ON a.id = con.agent_id
          LEFT JOIN memories m ON m.id = con.memory_id
@@ -375,5 +392,15 @@ export async function getConversation(id: string): Promise<ConversationView | nu
     ),
   ])
 
-  return { ...conversation, idea: idea?.rows[0] ?? null, contributions: contributions.rows }
+  const shownIdea = idea?.rows[0] ?? null
+  // While an idea is hidden, what agents said in answer to it could repeat it. People's own
+  // words stay unless they've been hidden or withdrawn themselves.
+  const ideaHidden = shownIdea !== null && !shownIdea.text
+  return {
+    ...conversation,
+    idea: shownIdea,
+    contributions: ideaHidden
+      ? contributions.rows.map((c) => (c.author_kind === "agent" ? { ...c, text: "", remembered_from: null, remembered_text: null } : c))
+      : contributions.rows,
+  }
 }

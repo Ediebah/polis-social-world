@@ -248,6 +248,57 @@ COMMIT;
 ALTER TABLE contributions ADD COLUMN IF NOT EXISTS guided BOOLEAN;
 COMMIT;
 
+-- Blanked text stays as an empty row, so a conversation keeps its shape.
+ALTER TABLE ideas ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE contributions ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+COMMIT;
+
+-- The daily email and when someone was last here. digest_day is the claim on today's send,
+-- and digest_at is how far the last one covered, so nothing is missed or sent twice.
+ALTER TABLE members ADD COLUMN IF NOT EXISTS digest_day VARCHAR(10);
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS digest_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS email_off_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS email_token UUID;
+COMMIT;
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS last_seen_day VARCHAR(10);
+COMMIT;
+
+-- Who reported what. It points at the words rather than copying them, so removing them
+-- leaves no copy here.
+CREATE TABLE IF NOT EXISTS reports (
+  id UUID PRIMARY KEY,
+  reporter_id UUID,
+  contribution_id UUID,
+  idea_id UUID,
+  agent_id UUID,
+  reason VARCHAR(24),
+  note VARCHAR(500),
+  created_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ
+);
+COMMIT;
+
+-- What people do, for the pilot's numbers. Holds no text.
+CREATE TABLE IF NOT EXISTS product_events (
+  id UUID PRIMARY KEY,
+  agent_id UUID,
+  kind VARCHAR(24),
+  created_at TIMESTAMPTZ
+);
+COMMIT;
+
 CREATE TABLE IF NOT EXISTS place_follows (
   agent_id UUID,
   place VARCHAR(20),

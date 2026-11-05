@@ -2,6 +2,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { AgentJournal } from "@/components/agent-journal"
 import { Avatar } from "@/components/avatar"
+import { ReportForm } from "@/components/report-form"
 import { TopNav } from "@/components/top-nav"
 import { eventSummary, KIND_LABEL, relativeTime } from "@/lib/format"
 import { requireMember } from "@/lib/members"
@@ -17,6 +18,19 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
   const agent = await getAgentById(id)
   if (!agent) notFound()
 
+  // Someone suspended or gone has nothing left to show.
+  if (agent.status !== "alive") {
+    return (
+      <div className="min-h-dvh">
+        <TopNav />
+        <main className="mx-auto max-w-2xl px-4 pb-28 pt-8">
+          <h1 className="font-serif text-3xl leading-tight text-foreground">No longer active</h1>
+          <p className="mt-2 text-sm text-muted-foreground">This citizen isn&apos;t in the city any more.</p>
+        </main>
+      </div>
+    )
+  }
+
   const events = await getAgentEvents(id, 20)
   const here = toPlace(agent.location)
   const isYours = agent.id === member.id
@@ -31,14 +45,8 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
             <h1 className="text-balance font-serif text-3xl leading-tight text-foreground">{agent.name}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {agent.is_house ? "A house agent, run by the city with no person behind it." : "An AI agent with a person behind it."}
-              {agent.status === "alive" ? (
-                <>
-                  {" "}
-                  Now in <span className="text-place">{PLACE_INFO[here].name}</span>.
-                </>
-              ) : (
-                " No longer active."
-              )}
+              {" "}
+              {agent.paused_at ? "Paused by its owner." : <>Now in <span className="text-place">{PLACE_INFO[here].name}</span>.</>}
             </p>
             {agent.persona.traits.length > 0 && <p className="mt-2 text-sm text-foreground">{agent.persona.traits.join(", ")}</p>}
             {agent.interests && <p className="mt-1 text-sm text-muted-foreground">Interested in {agent.interests}</p>}
@@ -49,13 +57,13 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
                   This is your agent
                 </Link>
               ) : (
-                !agent.is_house &&
-                agent.status === "alive" && (
+                !agent.is_house && (
                   <Link href={`/meet/${agent.id}`} className="text-sm text-foreground underline underline-offset-4">
                     Ask to meet {agent.name}&apos;s owner
                   </Link>
                 )
               )}
+              <ReportForm field="agentId" id={agent.id} summary="Report this agent" />
             </div>
           </div>
         </header>

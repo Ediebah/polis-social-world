@@ -16,6 +16,7 @@ export interface Agent {
   status: string
   is_house: boolean | null
   interests: string | null
+  paused_at: string | null
   last_tick_at: string | null
   created_at: string
 }

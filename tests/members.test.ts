@@ -74,10 +74,20 @@ function filesNamed(name: string, dir = join(process.cwd(), "app")): string[] {
 }
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
-const PUBLIC_PAGES = ["/join/page.tsx", "/join/[code]/page.tsx", "/login/page.tsx", "/login/[token]/page.tsx"]
+const PUBLIC_PAGES = [
+  "/join/page.tsx",
+  "/join/[code]/page.tsx",
+  "/login/page.tsx",
+  "/login/[token]/page.tsx",
+  "/privacy/page.tsx",
+  "/unsubscribe/[token]/page.tsx",
+  "/unsubscribe/done/page.tsx",
+]
+// A mail client calls this with no cookie. tests/digest.test.ts covers what it can do.
+const PUBLIC_ROUTES = ["/api/unsubscribe/[token]/route.ts"]
 
 describe("everything is members-only unless it's on purpose", () => {
-  const routes = filesNamed("route.ts")
+  const routes = filesNamed("route.ts").filter((r) => !PUBLIC_ROUTES.some((allowed) => r.endsWith(allowed)))
   const pages = filesNamed("page.tsx").filter((p) => !PUBLIC_PAGES.some((allowed) => p.endsWith(allowed)))
 
   it("finds the routes and pages to check", () => {

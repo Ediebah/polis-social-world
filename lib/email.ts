@@ -10,13 +10,23 @@ export function appUrl(): string | null {
 }
 
 export function emailEnabled(): boolean {
-  return Boolean(process.env.EMAIL_FROM && process.env.AWS_EMAIL_ROLE_ARN && appUrl())
+  // The sending domain has no mailbox, so without EMAIL_REPLY_TO nobody would get replies,
+  // bounces or reports, and the privacy page tells people to reply to ask for things.
+  return Boolean(process.env.EMAIL_FROM && process.env.AWS_EMAIL_ROLE_ARN && process.env.EMAIL_REPLY_TO && appUrl())
 }
 
-export async function sendEmail(message: { to: string; subject: string; text: string }): Promise<void> {
+export async function sendEmail(message: {
+  to: string
+  subject: string
+  text: string
+  headers?: { Name: string; Value: string }[]
+}): Promise<void> {
   client ??= new SESv2Client({
     region: process.env.AWS_EMAIL_REGION || AWS_REGION,
     credentials: emailCredentials(),
+    // So one stuck send can't use up a whole daily email run.
+    maxAttempts: 2,
+    requestHandler: { connectionTimeout: 3_000, requestTimeout: 10_000 },
   })
   await client.send(
     new SendEmailCommand({
@@ -24,17 +34,13 @@ export async function sendEmail(message: { to: string; subject: string; text: st
       // sending address still applies.
       FromEmailAddress: `Mindworld <${process.env.EMAIL_FROM}>`,
       Destination: { ToAddresses: [message.to] },
-      // The sending domain has no mailbox, so replies and bounces need somewhere to go.
-      ...(process.env.EMAIL_REPLY_TO
-        ? {
-            ReplyToAddresses: [process.env.EMAIL_REPLY_TO],
-            FeedbackForwardingEmailAddress: process.env.EMAIL_REPLY_TO,
-          }
-        : {}),
+      ReplyToAddresses: [process.env.EMAIL_REPLY_TO as string],
+      FeedbackForwardingEmailAddress: process.env.EMAIL_REPLY_TO,
       Content: {
         Simple: {
           Subject: { Data: message.subject, Charset: "UTF-8" },
           Body: { Text: { Data: message.text, Charset: "UTF-8" } },
+          ...(message.headers ? { Headers: message.headers } : {}),
         },
       },
     }),

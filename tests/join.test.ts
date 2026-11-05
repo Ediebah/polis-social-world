@@ -476,6 +476,7 @@ describe("POST /api/admin/invites", () => {
       vi.stubEnv("EMAIL_FROM", "hello@city.test")
       vi.stubEnv("AWS_EMAIL_ROLE_ARN", "arn:aws:iam::123456789012:role/email")
       vi.stubEnv("APP_URL", "https://city.test")
+      vi.stubEnv("EMAIL_REPLY_TO", "founder@example.com")
     }
 
     it("emails each person their own link, built from the app's address", async () => {

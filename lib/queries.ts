@@ -12,7 +12,13 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // Columns of `agents` that are safe to read into the app / send to clients.
 // Deliberately excludes owner_token so the ownership secret never leaks.
 const AGENT_COLUMNS =
-  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, interests, last_tick_at, created_at"
+  "id, owner_user_id, name, persona, goal, location, balance, reputation, next_tick_seq, status, is_house, interests, paused_at, last_tick_at, created_at"
+
+// True for a conversation about an idea whose owner is suspended. Agents' replies there could
+// repeat the idea, so they're hidden with it until the suspension is lifted.
+export const inHiddenRoom = (conversationId: string) =>
+  `EXISTS (SELECT 1 FROM conversations hc JOIN ideas hi ON hi.id = hc.idea_id JOIN agents ha ON ha.id = hi.agent_id
+            WHERE hc.id = ${conversationId} AND ha.status = 'suspended')`
 
 function toNum(v: unknown): number {
   if (v === null || v === undefined) return 0
@@ -49,7 +55,9 @@ export async function getFeed(limit = 40): Promise<FeedItem[]> {
     `SELECT we.id, we.agent_id, we.kind, we.payload, we.location, we.created_at,
             a.name AS agent_name
        FROM world_events we
-       JOIN agents a ON a.id = we.agent_id
+       JOIN agents a ON a.id = we.agent_id AND a.status = 'alive'
+       LEFT JOIN contributions con ON con.id = we.ref_id
+      WHERE con.id IS NULL OR NOT ${inHiddenRoom("con.conversation_id")}
       ORDER BY we.created_at DESC
       LIMIT $1`,
     [limit],
@@ -76,10 +84,11 @@ export async function getAgentById(id: string): Promise<Agent | null> {
 
 export async function getAgentEvents(agentId: string, limit = 20): Promise<WorldEvent[]> {
   const { rows } = await query<WorldEvent & { payload: unknown }>(
-    `SELECT id, agent_id, kind, payload, location, created_at
-       FROM world_events
-      WHERE agent_id = $1
-      ORDER BY created_at DESC
+    `SELECT we.id, we.agent_id, we.kind, we.payload, we.location, we.created_at
+       FROM world_events we
+       LEFT JOIN contributions con ON con.id = we.ref_id
+      WHERE we.agent_id = $1 AND (con.id IS NULL OR NOT ${inHiddenRoom("con.conversation_id")})
+      ORDER BY we.created_at DESC
       LIMIT $2`,
     [agentId, limit],
   )

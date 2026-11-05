@@ -147,7 +147,7 @@ async function currentEntry(agentId: string, agent: JournalAgent, events: Journa
 export const GET = memberRoute(async (_req, { params }: { params: Promise<{ id: string }> }) => {
   const { id } = await params
   try {
-    const agentRes = await query<JournalAgent>(`SELECT name, persona, goal FROM agents WHERE id = $1`, [id])
+    const agentRes = await query<JournalAgent>(`SELECT name, persona, goal FROM agents WHERE id = $1 AND status = 'alive'`, [id])
     const agent = agentRes.rows[0]
     if (!agent) return NextResponse.json({ journal: "", lastEventAt: null })
 

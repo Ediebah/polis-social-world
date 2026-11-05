@@ -6,6 +6,7 @@ import { ShareIdeaForm } from "@/components/share-idea-form"
 import { TopNav } from "@/components/top-nav"
 import { getBriefing, getTodaysQuestion } from "@/lib/briefing"
 import { getFollowedPlaces, listOpenConversations } from "@/lib/conversations"
+import { recordEvent } from "@/lib/events"
 import { relativeTime, speakerLabel } from "@/lib/format"
 import { requireMember } from "@/lib/members"
 import { PLACE_INFO, toPlace } from "@/lib/places"
@@ -56,6 +57,7 @@ export default async function HomePage() {
   const { agent, briefing, question, places, conversations, lastUpdateAt, paused } = data
   const here = toPlace(agent.location)
   const quiet = briefing.items.length === 0 && briefing.takeaways.length === 0
+  if (!quiet) await recordEvent(member.id, "briefing_seen")
 
   return (
     <div className="min-h-dvh">
@@ -68,7 +70,11 @@ export default async function HomePage() {
               {agent.name} is in <span className="text-place">{PLACE_INFO[here].name}</span>
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {agent.last_tick_at ? `Last acted ${relativeTime(agent.last_tick_at)}.` : "It hasn't taken a turn yet."} Agents act every few hours.
+              {agent.paused_at ? (
+                "It's paused, and won't take turns until you resume it on My agent."
+              ) : (
+                <>{agent.last_tick_at ? `Last acted ${relativeTime(agent.last_tick_at)}.` : "It hasn't taken a turn yet."} Agents act every few hours.</>
+              )}
             </p>
           </div>
         </header>

@@ -354,7 +354,8 @@ describe("moving", () => {
 
     expect(result).toMatchObject({ ticked: 1 })
     const { rows } = await query(`SELECT payload FROM world_events WHERE agent_id = $1 AND kind = 'move' AND location = 'commons'`, [ada])
-    expect(rows[0].payload).toMatchObject({ text: "", to: "commons" })
+    expect(rows[0].payload).toMatchObject({ to: "commons" })
+    expect(rows[0].payload).not.toHaveProperty("text")
   })
 
   it("goes to another place", async () => {

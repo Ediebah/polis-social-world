@@ -4,14 +4,15 @@ import { guideAction, setConversationFollowAction } from "@/app/actions"
 import { AddWordsForm } from "@/components/add-words-form"
 import { AutoRefresh } from "@/components/auto-refresh"
 import { Avatar } from "@/components/avatar"
+import { ContributionItem } from "@/components/contribution-item"
+import { ReportForm } from "@/components/report-form"
 import { TopNav } from "@/components/top-nav"
 import { Button } from "@/components/ui/button"
 import { getConversation, getGuide, GUIDE_MOVES, isFollowing, type GuideMove } from "@/lib/conversations"
-import { relativeTime, speakerLabel } from "@/lib/format"
 import { requireMember } from "@/lib/members"
 import { PLACE_INFO, toPlace } from "@/lib/places"
-import type { ContributionView, ConversationView } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { getAgentById } from "@/lib/queries"
+import type { ConversationView } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
@@ -27,49 +28,13 @@ const GUIDE_PROMISE: Record<GuideMove, string> = {
   connection: "connect this to something else it's seen",
 }
 
-function canMeet(person: { agent_id: string; is_house?: boolean | null }, memberId: string) {
-  return person.agent_id !== memberId && !person.is_house
-}
-
-function Contribution({ item, memberId, conversationId }: { item: ContributionView; memberId: string; conversationId: string }) {
-  const isOwner = item.author_kind === "owner"
-  return (
-    <li id={item.id} className={cn("flex scroll-mt-16 gap-3", isOwner && "rounded-r-lg border-l-2 border-place bg-card/60 py-3 pl-3 pr-3")}>
-      <Link href={`/agent/${item.agent_id}`} className="shrink-0 pt-0.5" aria-label={item.agent_name}>
-        <Avatar seed={item.agent_id} name={item.agent_name} size={32} />
-      </Link>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-muted-foreground">
-          <Link href={`/agent/${item.agent_id}`} className="hover:text-foreground">
-            {speakerLabel(item)}
-          </Link>
-          , {relativeTime(item.created_at)}
-        </p>
-        <p className={cn("mt-1 whitespace-pre-wrap text-pretty text-foreground", isOwner ? "words-person" : "text-sm leading-relaxed")}>{item.text}</p>
-        {item.remembered_from && (
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Cites what this agent took from{" "}
-            <Link href={`/conversation/${item.remembered_from}`} className="underline underline-offset-4 hover:text-foreground">
-              another conversation
-            </Link>
-            : {item.remembered_text}
-          </p>
-        )}
-        {canMeet(item, memberId) && (
-          <Link href={`/meet/${item.agent_id}?from=${conversationId}`} className="mt-1.5 inline-block text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
-            Ask to meet {item.agent_name}&apos;s owner
-          </Link>
-        )}
-      </div>
-    </li>
-  )
-}
-
 // Everyone who has said something here, and whoever's idea it is.
 function peopleInRoom(conversation: ConversationView) {
   const people = new Map<string, string>()
-  if (conversation.idea) people.set(conversation.idea.agent_id, conversation.idea.agent_name)
-  for (const item of conversation.contributions) people.set(item.agent_id, item.agent_name)
+  if (conversation.idea?.text) people.set(conversation.idea.agent_id, conversation.idea.agent_name)
+  for (const item of conversation.contributions) {
+    if (item.text) people.set(item.agent_id, item.agent_name)
+  }
   return [...people]
 }
 
@@ -81,8 +46,10 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
 
   const placeKey = toPlace(conversation.place)
   const place = PLACE_INFO[placeKey]
-  const open = conversation.status === "open"
-  const [following, guide] = await Promise.all([isFollowing(member.id, id), getGuide(member.id)])
+  // An idea's text is blank once it's withdrawn, or while its owner is suspended.
+  const ideaGone = conversation.idea !== null && !conversation.idea.text
+  const open = conversation.status === "open" && !ideaGone
+  const [following, guide, me] = await Promise.all([isFollowing(member.id, id), getGuide(member.id), getAgentById(member.id)])
   const guidedHere = guide?.conversationId === id ? guide.move : null
   const people = peopleInRoom(conversation)
 
@@ -96,16 +63,20 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
               {place.name}
               {!open && ", closed"}
             </Link>
-            <form action={setConversationFollowAction}>
-              <input type="hidden" name="conversationId" value={id} />
-              <input type="hidden" name="follow" value={following ? "0" : "1"} />
-              <Button type="submit" variant={following ? "secondary" : "outline"} className="h-10 px-3 sm:h-8">
-                {following ? "Following" : "Follow"}
-              </Button>
-            </form>
+            {!ideaGone && (
+              <form action={setConversationFollowAction}>
+                <input type="hidden" name="conversationId" value={id} />
+                <input type="hidden" name="follow" value={following ? "0" : "1"} />
+                <Button type="submit" variant={following ? "secondary" : "outline"} className="h-10 px-3 sm:h-8">
+                  {following ? "Following" : "Follow"}
+                </Button>
+              </form>
+            )}
           </div>
 
-          {conversation.idea ? (
+          {ideaGone ? (
+            <p className="mt-5 text-pretty text-lg italic text-muted-foreground">This idea is no longer here.</p>
+          ) : conversation.idea ? (
             <>
               <blockquote className="mt-5 whitespace-pre-wrap text-pretty font-serif text-2xl leading-snug text-foreground">
                 {conversation.idea.text}
@@ -125,6 +96,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
                   </>
                 )}
               </p>
+              {conversation.idea.agent_id !== member.id && <ReportForm field="ideaId" id={conversation.idea.id} summary="Report this idea" />}
             </>
           ) : (
             <>
@@ -160,7 +132,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
             ) : (
               <ul className="flex flex-col gap-5">
                 {conversation.contributions.map((item) => (
-                  <Contribution key={item.id} item={item} memberId={member.id} conversationId={id} />
+                  <ContributionItem key={item.id} item={item} memberId={member.id} conversationId={id} />
                 ))}
               </ul>
             )}
@@ -178,6 +150,9 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
                   <p className="mb-3 text-pretty text-xs leading-relaxed text-muted-foreground">
                     Pick what it should do on its next turn. It chooses its own words, and they&apos;re labeled as guided by you.
                   </p>
+                )}
+                {me?.paused_at && (
+                  <p className="mb-3 text-pretty text-xs leading-relaxed text-foreground">{member.name} is paused, so it won&apos;t do this until you resume it on My agent.</p>
                 )}
                 <div className="flex flex-wrap gap-2">
                   {GUIDE_MOVES.map((move) => (

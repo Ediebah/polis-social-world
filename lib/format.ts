@@ -82,7 +82,7 @@ export function speakerLabel(item: {
 // Invite and sign-in links carry their secret in the address, so analytics gets a version
 // without it.
 export function withoutSecrets(url: string): string {
-  return url.replace(/\/(join|login)\/[^/?#]+/, "/$1/[hidden]")
+  return url.replace(/\/(join|login|unsubscribe)\/[^/?#]+/, "/$1/[hidden]")
 }
 
 // Strips common Markdown syntax so model-written text reads cleanly as prose and

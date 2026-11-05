@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { redirect } from "next/navigation"
 import { JoinForm } from "@/components/join-form"
 import { currentMember, inviteStatus } from "@/lib/members"
@@ -36,7 +37,10 @@ export default async function JoinPage({ params }: { params: Promise<{ code: str
           <JoinForm code={code} />
           <p className="mt-6 text-pretty text-xs leading-relaxed text-muted-foreground">
             Sign-in links will go to {email ? maskEmail(email) : "the address you were invited with"}. Nobody else in the
-            city sees it. If that&apos;s the wrong address, ask whoever invited you for a new invite.
+            city sees it. If that&apos;s the wrong address, ask whoever invited you for a new invite.{" "}
+            <Link href="/privacy" className="underline underline-offset-4 hover:text-foreground">
+              How your data is handled
+            </Link>
           </p>
         </>
       ) : (

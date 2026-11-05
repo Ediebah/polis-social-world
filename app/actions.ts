@@ -29,11 +29,16 @@ import {
   type IntroRefusal,
 } from "@/lib/introductions"
 import { isAllowedName } from "@/lib/attribution"
+import { setDailyEmail, unsubscribe } from "@/lib/digest"
+import { recordEvent } from "@/lib/events"
 import { redeemLoginLink, sendLoginLink } from "@/lib/login"
 import { currentMember, JoinError, joinWithInvite, type JoinResult } from "@/lib/members"
 import { ownerCookie, OWNER_COOKIE_OPTIONS, OWN_PREFIX } from "@/lib/owner-cookies"
 import { isPlace } from "@/lib/places"
 import { ownsAgent } from "@/lib/queries"
+import { deleteAccount, setAgentPaused, withdrawIdea, withdrawWords } from "@/lib/removal"
+import { isReportReason, MAX_REPORT_NOTE } from "@/lib/report-reasons"
+import { fileReport, notifyFounder, ReportError, type ReportRefusal } from "@/lib/reports"
 import { welcomeReply } from "@/lib/simulation"
 import { TRAIT_OPTIONS } from "@/lib/types"
 
@@ -60,7 +65,7 @@ export async function joinAction(_prev: JoinState, formData: FormData): Promise<
 
   if (await currentMember()) return refuse("You already have a citizen here.")
   if (name.length < 2 || name.length > MAX_NAME) return refuse(`Give your agent a name of 2 to ${MAX_NAME} characters.`)
-  if (!isAllowedName(name)) return refuse("Your agent's name can use letters, numbers, spaces, hyphens, apostrophes and periods.")
+  if (!isAllowedName(name)) return refuse("Your agent's name can use letters from one alphabet, numbers, spaces, hyphens, apostrophes and periods.")
   // Only known trait values, so a hand-crafted POST can't store junk.
   if (traits.length < 3 || traits.length > 5 || !traits.every((t) => (TRAIT_OPTIONS as readonly string[]).includes(t))) {
     return refuse("Pick between 3 and 5 personality traits.")
@@ -86,6 +91,7 @@ export async function joinAction(_prev: JoinState, formData: FormData): Promise<
     return refuse("Something went wrong. Please try again.")
   }
 
+  await recordEvent(joined.id, "joined")
   const store = await cookies()
   store.set(ownerCookie(joined.id), joined.ownerToken, OWNER_COOKIE_OPTIONS)
 
@@ -164,6 +170,7 @@ export async function addWordsAction(_prev: OwnerWordsState, formData: FormData)
   } catch (err) {
     return { error: ownerWordsFailure(err), text }
   }
+  await recordEvent(agentId, "words")
   revalidatePath(`/conversation/${conversationId}`)
   revalidatePath("/")
   return { ok: true }
@@ -182,6 +189,7 @@ export async function shareIdeaAction(_prev: OwnerWordsState, formData: FormData
   } catch (err) {
     return { error: ownerWordsFailure(err), text, place }
   }
+  await recordEvent(agentId, "idea")
   revalidatePath("/me")
   revalidatePath("/explore")
   revalidatePath("/")
@@ -225,6 +233,8 @@ export async function askToMeetAction(_prev: IntroductionFormState, formData: Fo
       contact,
       String(formData.get("conversationId") ?? "") || undefined,
     )
+    await recordEvent(member.id, "ask_to_meet")
+    if (done === "connected") await recordEvent(member.id, "intro_connected")
     revalidateConnections()
     return { done }
   } catch (err) {
@@ -239,6 +249,7 @@ export async function acceptIntroductionAction(_prev: IntroductionFormState, for
 
   try {
     await respondToIntroduction(member.id, String(formData.get("agentId") ?? ""), true, contact)
+    await recordEvent(member.id, "intro_connected")
     revalidateConnections()
     return { done: "connected" }
   } catch (err) {
@@ -262,7 +273,7 @@ export async function guideAction(formData: FormData): Promise<void> {
   const move = String(formData.get("move") ?? "")
   if (!member || !isGuideMove(move)) return
 
-  await guideAgent(member.id, conversationId, move)
+  if (await guideAgent(member.id, conversationId, move)) await recordEvent(member.id, "guide")
   revalidatePath(`/conversation/${conversationId}`)
 }
 
@@ -305,4 +316,109 @@ export async function updateInterestsAction(_prev: InterestsState, formData: For
   }
   revalidatePath("/me")
   return { ok: true }
+}
+
+// Removing your own things. Each acts as whoever is signed in, so nobody can reach anyone else's.
+
+export async function withdrawIdeaAction(formData: FormData): Promise<void> {
+  const member = await currentMember()
+  if (!member) return
+
+  if (await withdrawIdea(member.id, String(formData.get("ideaId") ?? ""))) await recordEvent(member.id, "withdrew")
+  revalidatePath("/me")
+  revalidatePath("/explore")
+  revalidatePath("/")
+}
+
+export async function withdrawWordsAction(formData: FormData): Promise<void> {
+  const member = await currentMember()
+  if (!member) return
+
+  const conversationId = String(formData.get("conversationId") ?? "")
+  if (await withdrawWords(member.id, String(formData.get("contributionId") ?? ""))) await recordEvent(member.id, "withdrew")
+  revalidatePath(`/conversation/${conversationId}`)
+  revalidatePath("/")
+}
+
+export async function setPausedAction(formData: FormData): Promise<void> {
+  const member = await currentMember()
+  if (!member) return
+
+  await setAgentPaused(member.id, formData.get("paused") === "1")
+  revalidatePath("/me")
+  revalidatePath("/")
+}
+
+export async function setDailyEmailAction(formData: FormData): Promise<void> {
+  const member = await currentMember()
+  if (!member) return
+
+  await setDailyEmail(member.id, formData.get("on") === "1")
+  revalidatePath("/me")
+}
+
+// Comes from the link in the email, so there may be nobody signed in.
+export async function unsubscribeAction(formData: FormData): Promise<void> {
+  await unsubscribe(String(formData.get("token") ?? "")).catch((err) => console.error("[polis] unsubscribe error:", err))
+  redirect("/unsubscribe/done")
+}
+
+export type DeleteAccountState = { error?: string }
+
+export async function deleteAccountAction(_prev: DeleteAccountState, formData: FormData): Promise<DeleteAccountState> {
+  const member = await currentMember()
+  if (!member) return { error: "Sign in to do this." }
+
+  // Typing the name makes it hard to do by accident, since it can't be undone.
+  if (String(formData.get("confirm") ?? "").trim() !== member.name) {
+    return { error: `Type ${member.name} exactly to confirm.` }
+  }
+  try {
+    await deleteAccount(member.id)
+  } catch (err) {
+    console.error("[polis] delete account error:", err)
+    return { error: "Something went wrong, and nothing was deleted. Please try again." }
+  }
+  const store = await cookies()
+  for (const { name } of store.getAll()) {
+    if (name.startsWith(OWN_PREFIX)) store.delete(name)
+  }
+  redirect("/join?deleted=1")
+}
+
+export type ReportState = { error?: string; ok?: boolean; note?: string }
+
+const REPORT_MESSAGES: Record<ReportRefusal, string> = {
+  target: "This can't be reported.",
+  limit: "You've sent the most reports you can for today.",
+}
+
+export async function reportAction(_prev: ReportState, formData: FormData): Promise<ReportState> {
+  const note = String(formData.get("note") ?? "")
+  const reason = String(formData.get("reason") ?? "")
+  const member = await currentMember()
+  if (!member) return { error: "Sign in to report this.", note }
+  if (!isReportReason(reason)) return { error: "Pick a reason.", note }
+  if (note.length > MAX_REPORT_NOTE) return { error: `That's too long (max ${MAX_REPORT_NOTE} characters).`, note }
+
+  try {
+    const { id } = await fileReport(
+      member.id,
+      {
+        contributionId: String(formData.get("contributionId") ?? ""),
+        ideaId: String(formData.get("ideaId") ?? ""),
+        agentId: String(formData.get("agentId") ?? ""),
+      },
+      reason,
+      note.trim(),
+    )
+    await recordEvent(member.id, "reported")
+    // After responding, so nobody waits on the email. The report is stored whatever happens.
+    after(() => notifyFounder(id).catch((err) => console.error("[polis] report email error:", err)))
+    return { ok: true }
+  } catch (err) {
+    if (err instanceof ReportError) return { error: REPORT_MESSAGES[err.reason], note }
+    console.error("[polis] report error:", err)
+    return { error: "Something went wrong. Please try again.", note }
+  }
 }

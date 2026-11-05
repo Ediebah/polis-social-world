@@ -1,6 +1,6 @@
 import { speakerLabel, withoutSecrets } from "@/lib/format"
 import { describe, expect, it } from "vitest"
-import { claimsAboutOwner, isAllowedName, plainName, untrusted } from "@/lib/attribution"
+import { claimsAboutOwner, isAllowedName, nameKey, plainName, untrusted } from "@/lib/attribution"
 
 describe("untrusted", () => {
   it("wraps text so the model can tell it apart from instructions", () => {
@@ -36,6 +36,42 @@ describe("plainName", () => {
     ["???", "someone"],
   ])("keeps only the characters a name needs: %j", (input, output) => {
     expect(plainName(input)).toBe(output)
+  })
+})
+
+describe("names that hide or pass for something else", () => {
+  it.each([
+    ["a variation selector", "Mira\uFE00 Solenne"],
+    ["a Hangul filler", "Mira\u3164 Solenne"],
+    ["a grapheme joiner", "Mi\u034Fra"],
+    ["Armenian among Latin", "Mir\u0561 Solenne"],
+    ["Cherokee among Latin", "\u13AAda Bright"],
+    ["Cyrillic among Latin", "M\u0456ra"],
+  ])("refuses %s", (_how, name) => {
+    expect(isAllowedName(name)).toBe(false)
+  })
+
+  it.each([["Jos\u00E9"], ["Ng\u0169g\u0129"], ["O'Brien"], ["Jean-Luc 2"], ["\u041C\u0430\u0440\u0438\u044F"], ["\u7530\u4E2D\u3055\u3093"], ["\uAE40\uCCA0\uC218"], ["\u0915\u093F\u0930\u0923"]])(
+    "allows %s",
+    (name) => {
+      expect(isAllowedName(name)).toBe(true)
+    },
+  )
+
+  it.each([
+    ["a variation selector", "Mira\uFE00"],
+    ["a Hangul filler", "Mira\u3164"],
+    ["an accent from a later block", "Mira\u1DC4"],
+    ["an enclosing mark", "Mira\u20DD"],
+    ["a dotless i", "M\u0131ra"],
+    ["small capitals", "\u1D0D\u026A\u0280\u1D00"],
+    ["a script a", "Mir\u0251"],
+  ])("counts %s as the same name", (_how, name) => {
+    expect(nameKey(name)).toBe(nameKey("Mira"))
+  })
+
+  it("keeps apart Japanese names that differ by a voicing mark", () => {
+    expect(nameKey("\u304C\u304F")).not.toBe(nameKey("\u304B\u304F"))
   })
 })
 

@@ -5,6 +5,7 @@ import { NextResponse, type NextRequest } from "next/server"
 import { nameKey } from "./attribution"
 import { followConversation, followPlace, insertIdea } from "./conversations"
 import { query, transaction } from "./db"
+import { noteVisit } from "./events"
 import { retryOnConflict } from "./occ"
 import { ownerPairs } from "./owner-cookies"
 import { createCitizen, getOwnedAgents } from "./queries"
@@ -30,6 +31,7 @@ export async function currentMember(): Promise<Member | null> {
 export async function requireMember(): Promise<Member> {
   const member = await currentMember()
   if (!member) redirect("/join")
+  await noteVisit(member.id)
   return member
 }
 

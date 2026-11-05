@@ -2,12 +2,12 @@ import { Output } from "ai"
 import type { ClientBase } from "pg"
 import { z } from "zod"
 import { claimsAboutOwner, plainName, untrusted } from "./attribution"
-import { followConversation, freshGuide, type GuideMove } from "./conversations"
+import { followConversation, freshGuide, IDEA_IS_VISIBLE, type GuideMove } from "./conversations"
 import { query, withConnection } from "./db"
 import { stripMarkdown } from "./format"
 import { retryOnConflict } from "./occ"
 import { PLACE_INFO, toPlace, type Place } from "./places"
-import { bumpCounter } from "./queries"
+import { bumpCounter, inHiddenRoom } from "./queries"
 import { generateWithinBudget, SpendBlockedError } from "./spend"
 import type { Agent, Persona } from "./types"
 import { LOCATIONS } from "./types"
@@ -97,7 +97,7 @@ async function selectAgentsForTick(limit: number): Promise<TickAgent[]> {
     // everyone else.
     `SELECT ${TICK_AGENT_COLUMNS}
        FROM agents
-      WHERE status = 'alive'
+      WHERE status = 'alive' AND paused_at IS NULL
         AND (COALESCE(last_attempt_at, last_tick_at) IS NULL OR COALESCE(last_attempt_at, last_tick_at) < $2)
       ORDER BY (COALESCE(last_attempt_at, last_tick_at) IS NOT NULL), COALESCE(last_attempt_at, last_tick_at, created_at)
       LIMIT $1`,
@@ -181,8 +181,8 @@ interface ConversationRow {
 async function toOfferedConversation(c: ConversationRow, index: number): Promise<OfferedConversation> {
   const recent = await query<ShownContribution>(
     `SELECT a.name AS agent_name, con.author_kind, con.move, con.text
-       FROM contributions con JOIN agents a ON a.id = con.agent_id
-      WHERE con.conversation_id = $1
+       FROM contributions con JOIN agents a ON a.id = con.agent_id AND a.status = 'alive'
+      WHERE con.conversation_id = $1 AND con.withdrawn_at IS NULL
       ORDER BY con.created_at DESC, con.id DESC
       LIMIT $2`,
     [c.id, CONTRIBUTIONS_SHOWN],
@@ -211,7 +211,7 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
              FROM conversations c
              LEFT JOIN ideas i ON i.id = c.idea_id
              LEFT JOIN agents ia ON ia.id = i.agent_id
-            WHERE c.id = $1 AND c.status = 'open' AND (c.last_agent_id IS NULL OR c.last_agent_id <> $2)`,
+            WHERE c.id = $1 AND c.status = 'open' AND ${IDEA_IS_VISIBLE} AND (c.last_agent_id IS NULL OR c.last_agent_id <> $2)`,
           [agent.guide.conversationId, agent.id],
         )
       : { rows: [] as ConversationRow[] },
@@ -222,7 +222,7 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
          FROM conversations c
          LEFT JOIN ideas i ON i.id = c.idea_id
          LEFT JOIN agents ia ON ia.id = i.agent_id
-        WHERE c.status = 'open'
+        WHERE c.status = 'open' AND ${IDEA_IS_VISIBLE}
           AND (c.last_agent_id IS NULL OR c.last_agent_id <> $1)
           AND (c.place = $2 OR c.id IN (SELECT conversation_id FROM follows WHERE agent_id = $1))
         ORDER BY c.agent_turns ASC, c.created_at ASC
@@ -233,7 +233,7 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
     query<{ id: string; text: string; agent_id: string; agent_name: string; place: string }>(
       `SELECT i.id, i.text, i.agent_id, a.name AS agent_name, i.place
          FROM ideas i JOIN agents a ON a.id = i.agent_id AND a.status = 'alive'
-        WHERE (i.place = $1 OR i.agent_id = $2)
+        WHERE (i.place = $1 OR i.agent_id = $2) AND i.withdrawn_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.idea_id = i.id)
         ORDER BY (i.agent_id = $2) DESC, i.created_at ASC
         LIMIT $3`,
@@ -243,7 +243,9 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
       agent.place,
     ]),
     query<{ id: string; text: string; conversation_id: string }>(
-      `SELECT id, text, conversation_id FROM memories WHERE agent_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      `SELECT m.id, m.text, m.conversation_id FROM memories m
+        WHERE m.agent_id = $1 AND NOT ${inHiddenRoom("m.conversation_id")}
+        ORDER BY m.created_at DESC LIMIT $2`,
       [agent.id, MEMORIES_SHOWN],
     ),
   ])
@@ -280,13 +282,14 @@ async function buildOffers(agent: TickAgent): Promise<Offers> {
 async function gatherHistory(agent: TickAgent) {
   const [history, relationships] = await Promise.all([
     query<{ move: string | null; text: string }>(
-      `SELECT move, text FROM contributions
-        WHERE agent_id = $1 AND author_kind = 'agent'
-        ORDER BY created_at DESC LIMIT $2`,
+      `SELECT con.move, con.text FROM contributions con
+        WHERE con.agent_id = $1 AND con.author_kind = 'agent' AND con.withdrawn_at IS NULL
+          AND NOT ${inHiddenRoom("con.conversation_id")}
+        ORDER BY con.created_at DESC LIMIT $2`,
       [agent.id, HISTORY_SHOWN],
     ),
     query<{ name: string }>(
-      `SELECT a.name FROM relationships r JOIN agents a ON a.id = r.other_id
+      `SELECT a.name FROM relationships r JOIN agents a ON a.id = r.other_id AND a.status = 'alive'
         WHERE r.agent_id = $1
         ORDER BY r.updated_at DESC LIMIT $2`,
       [agent.id, RELATIONSHIPS_SHOWN],
@@ -403,7 +406,7 @@ function pickOtherLocation(current: string): Place {
 }
 
 type ResolvedAction =
-  | { type: "move"; text: string; place: Place }
+  | { type: "move"; place: Place }
   | {
       type: "open"
       text: string
@@ -429,7 +432,7 @@ function resolveAction(agent: TickAgent, action: AgentAction, offers: Offers): R
   const text = stripMarkdown(action.text)
   if (action.type === "move") {
     const place = action.to && action.to !== agent.place ? action.to : pickOtherLocation(agent.place)
-    return { type: "move", text: claimsAboutOwner(text) ? "" : text, place }
+    return { type: "move", place }
   }
 
   const takeaway = action.takeaway ? stripMarkdown(action.takeaway) || null : null
@@ -514,7 +517,7 @@ async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<C
       const claim = await client.query(
         `UPDATE agents
             SET next_tick_seq = next_tick_seq + 1, last_tick_at = $1, location = $2
-          WHERE id = $3 AND next_tick_seq = $4`,
+          WHERE id = $3 AND next_tick_seq = $4 AND status = 'alive' AND paused_at IS NULL`,
         [now, action.place, agent.id, agent.tickSeq],
       )
       if (claim.rowCount !== 1) {
@@ -524,12 +527,21 @@ async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<C
 
       let kind: string = action.type
       let refId: string | null = null
-      const payload: Record<string, unknown> = { text: action.text }
+      const payload: Record<string, unknown> = action.type === "move" ? {} : { text: action.text }
 
       if (action.type === "move") {
         payload.from = agent.place
         payload.to = action.place
       } else if (action.type === "open") {
+        if (action.idea) {
+          // A write to the idea's row, so this conflicts with a withdrawal at the same moment
+          // and one of them sees the other.
+          const stillThere = await client.query(`UPDATE ideas SET withdrawn_at = NULL WHERE id = $1 AND withdrawn_at IS NULL`, [action.idea.id])
+          if (stillThere.rowCount !== 1) {
+            await client.query("ROLLBACK")
+            return { status: "skipped" }
+          }
+        }
         const conversationId = crypto.randomUUID()
         await client.query(
           `INSERT INTO conversations (id, idea_id, place, question, opened_by, status, agent_turns, last_agent_id, created_at, updated_at)
@@ -629,7 +641,7 @@ export async function welcomeReply(conversationId: string): Promise<boolean> {
        FROM conversations c
        LEFT JOIN ideas i ON i.id = c.idea_id
        LEFT JOIN agents ia ON ia.id = i.agent_id
-      WHERE c.id = $1 AND c.status = 'open' AND c.agent_turns = 0`,
+      WHERE c.id = $1 AND c.status = 'open' AND c.agent_turns = 0 AND ${IDEA_IS_VISIBLE}`,
     [conversationId],
   )
   if (conversation.rows.length === 0) return false

@@ -76,6 +76,7 @@ beforeEach(() => {
   vi.stubEnv("EMAIL_FROM", "hello@city.test")
   vi.stubEnv("AWS_EMAIL_ROLE_ARN", "arn:aws:iam::123456789012:role/email")
   vi.stubEnv("APP_URL", "https://city.test")
+  vi.stubEnv("EMAIL_REPLY_TO", "founder@example.com")
 })
 
 describe("sending a link", () => {
@@ -156,18 +157,15 @@ describe("sending a link", () => {
     expect(await count("login_links")).toBe(1)
   })
 
-  it("sends replies and bounces to a mailbox someone reads, when there is one", async () => {
+  it("sends replies and bounces to a mailbox someone reads", async () => {
     await member()
-    await sendLoginLink(EMAIL)
-    expect(sentEmails[0]).toMatchObject({ replyTo: undefined, feedbackTo: undefined })
 
-    vi.stubEnv("EMAIL_REPLY_TO", "founder@example.com")
     await sendLoginLink(EMAIL)
 
-    expect(sentEmails[1]).toMatchObject({ from: "Mindworld <hello@city.test>", replyTo: ["founder@example.com"], feedbackTo: "founder@example.com" })
+    expect(sentEmails[0]).toMatchObject({ from: "Mindworld <hello@city.test>", replyTo: ["founder@example.com"], feedbackTo: "founder@example.com" })
   })
 
-  it.each(["EMAIL_FROM", "AWS_EMAIL_ROLE_ARN", "APP_URL"])("sends nothing, and leaves no link behind, without %s", async (name) => {
+  it.each(["EMAIL_FROM", "AWS_EMAIL_ROLE_ARN", "APP_URL", "EMAIL_REPLY_TO"])("sends nothing, and leaves no link behind, without %s", async (name) => {
     await member()
     vi.stubEnv(name, "")
 
@@ -386,7 +384,7 @@ describe("the sign-in page", () => {
     expect(await render()).toContain('name="email"')
   })
 
-  it.each(["EMAIL_FROM", "AWS_EMAIL_ROLE_ARN", "APP_URL"])("says email is off, rather than promising a link, without %s", async (name) => {
+  it.each(["EMAIL_FROM", "AWS_EMAIL_ROLE_ARN", "APP_URL", "EMAIL_REPLY_TO"])("says email is off, rather than promising a link, without %s", async (name) => {
     vi.stubEnv(name, "")
 
     const html = await render()
