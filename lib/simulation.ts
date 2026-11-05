@@ -134,6 +134,7 @@ interface OfferedConversation {
   id: string
   place: Place
   question: string | null
+  ideaId: string | null
   ideaText: string | null
   ideaAgentName: string | null
   openedBy: string | null
@@ -167,7 +168,7 @@ const GUIDE_WORDS: Record<GuideMove, string> = {
 }
 
 const CONVERSATION_COLUMNS =
-  "c.id, c.place, c.question, c.opened_by, c.last_agent_id, i.text AS idea_text, ia.name AS idea_agent_name"
+  "c.id, c.place, c.question, c.opened_by, c.last_agent_id, i.id AS idea_id, i.text AS idea_text, ia.name AS idea_agent_name"
 
 interface ConversationRow {
   id: string
@@ -175,6 +176,7 @@ interface ConversationRow {
   question: string | null
   opened_by: string | null
   last_agent_id: string | null
+  idea_id: string | null
   idea_text: string | null
   idea_agent_name: string | null
 }
@@ -193,6 +195,7 @@ async function toOfferedConversation(c: ConversationRow, index: number): Promise
     id: c.id,
     place: toPlace(c.place),
     question: c.question,
+    ideaId: c.idea_id,
     ideaText: c.idea_text,
     ideaAgentName: c.idea_agent_name,
     openedBy: c.opened_by,
@@ -509,7 +512,24 @@ async function insertContribution(
 
 type CommitOutcome = { status: "ok"; kind: string } | { status: "skipped" }
 
-async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<CommitOutcome> {
+// The model wrote its answer having read all of this. If any of it has been taken back since,
+// the answer could bring it back, wherever it's going.
+async function readSomethingTakenBack(client: ClientBase, offers: Offers): Promise<boolean> {
+  const memoryIds = offers.memories.map((m) => m.id)
+  const { rows } = await client.query<{ contributions: number; ideas: number; memories: number }>(
+    `SELECT (SELECT count(*)::int FROM contributions WHERE id::text = ANY($1) AND withdrawn_at IS NOT NULL) AS contributions,
+            (SELECT count(*)::int FROM ideas WHERE id::text = ANY($2) AND withdrawn_at IS NOT NULL) AS ideas,
+            (SELECT count(*)::int FROM memories WHERE id::text = ANY($3)) AS memories`,
+    [
+      offers.conversations.flatMap((c) => c.recent.map((r) => r.id)),
+      [...offers.ideas.map((i) => i.id), ...offers.conversations.flatMap((c) => (c.ideaId ? [c.ideaId] : []))],
+      memoryIds,
+    ],
+  )
+  return rows[0].contributions > 0 || rows[0].ideas > 0 || rows[0].memories < memoryIds.length
+}
+
+async function commitAction(agent: TickAgent, action: ResolvedAction, offers: Offers): Promise<CommitOutcome> {
   const now = new Date().toISOString()
 
   return await withConnection(async (client) => {
@@ -522,6 +542,11 @@ async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<C
         [now, action.place, agent.id, agent.tickSeq],
       )
       if (claim.rowCount !== 1) {
+        await client.query("ROLLBACK")
+        return { status: "skipped" }
+      }
+
+      if (action.type !== "move" && (await readSomethingTakenBack(client, offers))) {
         await client.query("ROLLBACK")
         return { status: "skipped" }
       }
@@ -555,15 +580,6 @@ async function commitAction(agent: TickAgent, action: ResolvedAction): Promise<C
         }
         payload.conversation_id = conversationId
       } else {
-        // The model wrote this having read these. If any has since been taken back, what it
-        // wrote could bring it back, so the turn doesn't land.
-        const takenBack = await client.query(`SELECT 1 FROM contributions WHERE id::text = ANY($1) AND withdrawn_at IS NOT NULL LIMIT 1`, [
-          action.conversation.recent.map((c) => c.id),
-        ])
-        if (takenBack.rows.length > 0) {
-          await client.query("ROLLBACK")
-          return { status: "skipped" }
-        }
         // Atomic, so simultaneous turns can't run a conversation past its limit.
         const turn = await client.query(
           `UPDATE conversations
@@ -669,7 +685,7 @@ export async function welcomeReply(conversationId: string): Promise<boolean> {
   try {
     const action = resolveAction(agent, await decideAction(agent, offers), offers)
     if (action?.type !== "add") return false
-    const outcome = await retryOnConflict(() => commitAction(agent, action))
+    const outcome = await retryOnConflict(() => commitAction(agent, action, offers))
     return outcome.status === "ok"
   } catch (err) {
     if (err instanceof SpendBlockedError) {
@@ -711,7 +727,7 @@ export async function runTick({ count, deadlineAt }: { count: number; deadlineAt
         skipped++
         continue
       }
-      const outcome = await retryOnConflict(() => commitAction(agent, action))
+      const outcome = await retryOnConflict(() => commitAction(agent, action, offers))
       if (outcome.status === "ok") ticked++
       else skipped++
     } catch (err) {

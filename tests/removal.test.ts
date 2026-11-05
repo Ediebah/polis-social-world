@@ -207,6 +207,20 @@ describe("withdrawing an idea", () => {
     expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === earlier)?.text).toBe(sentence)
   })
 
+  it("can't be used to erase agents' later replies in other rooms with a short phrase", async () => {
+    const ada = await member("Ada", "What would it take?")
+    const mira = await house("Mira")
+    const elsewhere = await question()
+    const later = await agentSays(mira.id, elsewhere, "What would it take to run this every week?")
+    const kept = await takeaway(mira.id, elsewhere, "What would it take to keep going?")
+
+    await withdrawIdea(ada.id, await ideaIdOf(ada.conversationId))
+
+    expect((await getConversation(elsewhere))?.contributions.find((c) => c.id === later)?.text).toBe("What would it take to run this every week?")
+    const { rows } = await query(`SELECT 1 FROM memories WHERE id = $1`, [kept])
+    expect(rows).toHaveLength(1)
+  })
+
   it("makes agents who took part write a new journal", async () => {
     const ada = await member("Ada", IDEA)
     const mira = await house("Mira")
@@ -923,6 +937,123 @@ describe("a turn that's already under way", () => {
       await expect(welcomeReply(ada.conversationId)).resolves.toBe(true)
 
       expect(await said(mira.id)).toBe(1)
+    })
+
+    describe("when the model read it in another room", () => {
+      // Mira alone has a turn, and is offered both rooms: C1 is Ada's and C2 is Bea's.
+      async function twoRooms() {
+        const { ada, bea, mira, wordsId } = await roomWithWords()
+        await query(`UPDATE agents SET last_attempt_at = now() WHERE id <> $1`, [mira.id])
+        const ideaId = await ideaIdOf(ada.conversationId)
+        return { ada, bea, mira, wordsId, ideaId }
+      }
+
+      const reply = (ref: string) =>
+        textResult(JSON.stringify({ type: "add", text: "A reply elsewhere.", to: null, idea_ref: null, conversation_ref: ref, kind: "question", takeaway: null, memory_ref: null }))
+
+      it("lands when nothing was taken back", async () => {
+        const { bea, mira } = await twoRooms()
+        onModelCall(async () => reply("C2"))
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(1)
+        expect((await getConversation(bea.conversationId))?.contributions.at(-1)?.text).toBe("A reply elsewhere.")
+      })
+
+      it("doesn't land after words in the other room are withdrawn", async () => {
+        const { bea, mira, wordsId } = await twoRooms()
+        onModelCall(async () => {
+          await withdrawWords(bea.id, wordsId)
+          return reply("C2")
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+      })
+
+      it("doesn't land after words in a later room it was offered are withdrawn", async () => {
+        const { ada, bea, mira } = await twoRooms()
+        vi.setSystemTime(Date.now() + 60_000)
+        const { id } = await addOwnerWords(ada.id, bea.conversationId, "Ada's words in Bea's room.")
+        onModelCall(async () => {
+          await withdrawWords(ada.id, id)
+          return reply("C1")
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+      })
+
+      it("doesn't land after the other room's idea is withdrawn", async () => {
+        const { ada, mira, ideaId } = await twoRooms()
+        onModelCall(async () => {
+          await withdrawIdea(ada.id, ideaId)
+          return reply("C2")
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+      })
+
+      it("doesn't land after an idea it was offered is withdrawn", async () => {
+        const { ada, mira } = await twoRooms()
+        vi.setSystemTime(Date.now() + 60_000)
+        const { id: waiting } = await shareIdea(ada.id, IDEA, "commons")
+        onModelCall(async () => {
+          await withdrawIdea(ada.id, waiting)
+          return reply("C2")
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+      })
+
+      it("doesn't land after something it remembered is removed", async () => {
+        const { ada, mira, ideaId } = await twoRooms()
+        await takeaway(mira.id, ada.conversationId, "Something it kept.")
+        await query(`UPDATE conversations SET status = 'closed' WHERE id = $1`, [ada.conversationId])
+        onModelCall(async () => {
+          await withdrawIdea(ada.id, ideaId)
+          return reply("C1")
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+      })
+
+      it("doesn't open a conversation either", async () => {
+        const { ada, bea, mira, wordsId } = await twoRooms()
+        vi.setSystemTime(Date.now() + 60_000)
+        const { id: waiting } = await shareIdea(ada.id, "Another idea that nobody has answered yet.", "commons")
+        onModelCall(async () => {
+          await withdrawWords(bea.id, wordsId)
+          return textResult(JSON.stringify({ type: "open", text: "Opening on it.", to: null, idea_ref: "I1", conversation_ref: null, kind: null, takeaway: null, memory_ref: null }))
+        })
+
+        await runScheduledSlot()
+
+        expect(await said(mira.id)).toBe(0)
+        const { rows } = await query(`SELECT count(*)::int AS n FROM conversations WHERE idea_id = $1`, [waiting])
+        expect(rows[0].n).toBe(0)
+      })
+
+      it("still moves, since moving says nothing", async () => {
+        const { bea, mira, wordsId } = await twoRooms()
+        onModelCall(async () => {
+          await withdrawWords(bea.id, wordsId)
+          return textResult(MOVE)
+        })
+
+        await runScheduledSlot()
+
+        expect((await getAgentById(mira.id))?.location).toBe("studio")
+      })
     })
 
     it("writes to the conversation when withdrawing, so a simultaneous turn conflicts with it", async () => {

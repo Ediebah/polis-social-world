@@ -95,7 +95,9 @@ function quotesAny(taken: TakenBack[]): (row: AgentText) => boolean {
     const isSentence = words.length >= QUOTED_WORDS
     return {
       after: new Date(created_at).getTime(),
-      room: isSentence ? null : conversation_id,
+      anywhere: isSentence,
+      // An idea has no room of its own here. Its conversation's replies are already gone.
+      room: conversation_id,
       phrases: isSentence
         ? Array.from({ length: words.length - QUOTED_WORDS + 1 }, (_, i) => ` ${words.slice(i, i + QUOTED_WORDS).join(" ")} `)
         : words.join(" ").length >= MIN_QUOTE
@@ -107,7 +109,7 @@ function quotesAny(taken: TakenBack[]): (row: AgentText) => boolean {
     const said = ` ${wordsOf(row.text).join(" ")} `
     const at = new Date(row.created_at).getTime()
     return checks.some(
-      (check) => at > check.after && (check.room === null || check.room === row.conversation_id) && check.phrases.some((phrase) => said.includes(phrase)),
+      (check) => at > check.after && (check.anywhere || check.room === row.conversation_id) && check.phrases.some((phrase) => said.includes(phrase)),
     )
   }
 }
