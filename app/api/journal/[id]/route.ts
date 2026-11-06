@@ -3,15 +3,14 @@
 // its recent events. Cached in-memory per warm instance (TTL) so repeated views
 // don't re-spend on the model.
 import { NextResponse } from "next/server"
-import { generateText } from "ai"
-import { anthropic } from "@ai-sdk/anthropic"
 import { query } from "@/lib/db"
 import { eventSummary, stripMarkdown } from "@/lib/format"
+import { generateWithinBudget, SpendBlockedError } from "@/lib/spend"
 
 export const dynamic = "force-dynamic"
 
-const MODEL = anthropic("claude-haiku-4-5-20251001")
 const TTL_MS = 90_000
+const MAX_JOURNAL_TOKENS = 300
 const cache = new Map<string, { text: string; at: number; lastEventAt: string | null }>()
 
 function parseJson<T>(v: unknown, fallback: T): T {
@@ -83,10 +82,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     let journal: string
     let fromModel = false
     try {
-      const { text } = await generateText({
-        model: MODEL,
-        maxRetries: 2,
-        timeout: { totalMs: 20_000 },
+      const { text } = await generateWithinBudget("journal", {
+        maxOutputTokens: MAX_JOURNAL_TOKENS,
         system:
           "You write a SHORT first-person journal entry (2 to 4 sentences) for a citizen of Polis, " +
           "looking back on their recent day. In their voice, vivid but grounded. Plain prose only — " +
@@ -111,8 +108,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         journal = buildDigest(evRes.rows)
       }
     } catch (err) {
-      // Model failed/timed out — fall back to the plain-prose digest.
-      console.error("[polis] journal model fallback:", err)
+      // Model failed/timed out or the city is paused or over budget — fall back to
+      // the plain-prose digest.
+      if (!(err instanceof SpendBlockedError)) console.error("[polis] journal model fallback:", err)
       journal = buildDigest(evRes.rows)
     }
 

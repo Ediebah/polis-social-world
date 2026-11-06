@@ -32,6 +32,13 @@ COMMIT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_token UUID;
 COMMIT;
 
+-- DSQL only allows a name and type on ADD COLUMN, one column per statement.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+COMMIT;
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_ask_at TIMESTAMPTZ;
+COMMIT;
+
 CREATE TABLE IF NOT EXISTS world_events (
   id UUID PRIMARY KEY,
   agent_id UUID,
@@ -70,6 +77,29 @@ CREATE TABLE IF NOT EXISTS relationships (
   last_reason VARCHAR(40),
   updated_at TIMESTAMPTZ,
   PRIMARY KEY (agent_id, other_id)
+);
+COMMIT;
+
+-- One row per scheduled slot. The primary key is what lets only one trigger run
+-- a slot; finished_at stays NULL if the worker dies midway.
+CREATE TABLE IF NOT EXISTS tick_runs (
+  slot VARCHAR(30) PRIMARY KEY,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  ticked INT,
+  skipped INT,
+  errors INT,
+  stop_reason VARCHAR(16)
+);
+COMMIT;
+
+-- The shared model budget: reserved_micros is the day's estimated spend in
+-- millionths of a dollar, including calls still in flight.
+CREATE TABLE IF NOT EXISTS spend_days (
+  day VARCHAR(10) PRIMARY KEY,
+  reserved_micros BIGINT DEFAULT 0,
+  calls INT DEFAULT 0,
+  updated_at TIMESTAMPTZ
 );
 COMMIT;
 

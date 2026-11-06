@@ -3,7 +3,7 @@
 import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
-import { nudgeAgentGoal, ownsAgent, spawnAgent } from "@/lib/queries"
+import { nudgeAgentGoal, ownsAgent, spawnAgent, SpawnLimitError } from "@/lib/queries"
 import { LOCATIONS, TRAIT_OPTIONS } from "@/lib/types"
 
 export type SpawnState = { error?: string }
@@ -46,6 +46,9 @@ export async function spawnAgentAction(_prev: SpawnState, formData: FormData): P
     agentId = res.id
     ownerToken = res.ownerToken
   } catch (err) {
+    if (err instanceof SpawnLimitError) {
+      return { error: "The city has welcomed all the new citizens it can for today. Please try again tomorrow." }
+    }
     console.error("[v0] spawn error:", err)
     return { error: "Something went wrong spawning your agent. Please try again." }
   }

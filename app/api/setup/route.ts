@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server"
+import { hasBearerSecret } from "@/lib/auth"
 import { claimSeed, ensureSchema, isSeeded, releaseSeed, seedWorld } from "@/lib/setup"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
-export async function GET() {
+// Creates or updates the schema and seeds an empty city. Safe to re-run after a
+// deploy that adds tables, and protected by ADMIN_SECRET because it runs DDL.
+export async function GET(req: Request) {
+  if (!hasBearerSecret(req, process.env.ADMIN_SECRET)) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
+  }
   try {
     await ensureSchema()
 
